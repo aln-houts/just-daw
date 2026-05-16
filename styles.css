@@ -506,185 +506,338 @@ body {
     50% { opacity: 0.7; }
 }
 
-/* Effects Rack */
-.effects-rack {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 6px;
-}
-
-.effects-add-btn {
-    padding: 4px 8px;
-    background-color: #333;
-    border: 1px dashed #555;
-    color: #888;
+/* Track Selection */
+.track-header {
     cursor: pointer;
-    border-radius: 3px;
-    font-size: 0.7rem;
-    text-align: center;
-    transition: all 0.2s;
+    transition: background 0.15s;
 }
 
-.effects-add-btn:hover {
-    background-color: #444;
-    border-color: #4CAF50;
-    color: #4CAF50;
-}
-
-.effect-slot {
+.track-header:hover {
     background-color: #2a2a2a;
-    border: 1px solid #444;
-    border-radius: 4px;
-    padding: 4px 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
 }
 
-.effect-slot.active {
-    border-color: #4CAF50;
+.track-header.selected {
+    background-color: #1e3a1e;
+    border-left: 3px solid #4CAF50;
 }
 
-.effect-slot.bypassed {
-    opacity: 0.5;
-    border-style: dashed;
+/* Track Effects Indicator */
+.track-effects-indicator {
+    min-height: 16px;
 }
 
-.effect-slot-top {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.effect-slot-name {
-    font-size: 0.7rem;
-    font-weight: bold;
-    color: #4CAF50;
-    flex-grow: 1;
-}
-
-.effect-toggle-btn {
-    padding: 1px 6px;
+.effects-badge {
+    display: inline-block;
+    padding: 1px 5px;
     background-color: #4CAF50;
-    border: none;
     color: white;
-    cursor: pointer;
-    border-radius: 2px;
+    border-radius: 8px;
     font-size: 0.6rem;
     font-weight: bold;
 }
 
-.effect-slot.bypassed .effect-toggle-btn {
-    background-color: #555;
+/* Tool Tray Active State */
+.tool-btn.active {
+    background-color: #4CAF50;
+    color: white;
 }
 
-.effect-remove-btn {
-    padding: 1px 4px;
+/* Bottom Panel */
+.bottom-panel {
+    position: fixed;
+    bottom: 50px;
+    left: 0;
+    right: 0;
+    height: 0;
+    background-color: #1e1e1e;
+    border-top: 1px solid #333;
+    overflow: hidden;
+    transition: height 0.25s ease;
+    z-index: 150;
+    display: flex;
+    flex-direction: column;
+}
+
+.bottom-panel.open {
+    height: 250px;
+}
+
+.bottom-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 16px;
+    background-color: #252525;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+}
+
+.bottom-panel-title {
+    font-size: 0.9rem;
+    font-weight: bold;
+    color: #4CAF50;
+}
+
+.bottom-panel-close {
+    padding: 4px 8px;
     background-color: transparent;
     border: none;
-    color: #666;
+    color: #888;
     cursor: pointer;
-    border-radius: 2px;
-    font-size: 0.7rem;
+    border-radius: 3px;
+    font-size: 1rem;
 }
 
-.effect-remove-btn:hover {
+.bottom-panel-close:hover {
     background-color: #f44336;
     color: white;
 }
 
-.effect-reorder {
-    display: flex;
-    gap: 2px;
+.bottom-panel-content {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
 }
 
-.effect-reorder button {
-    padding: 0 4px;
+/* Effects Panel */
+.effects-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.effects-track-info {
+    font-size: 0.85rem;
+    color: #aaa;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #333;
+}
+
+.effects-add-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.effects-type-select {
+    flex-grow: 1;
+    padding: 6px 10px;
+    background-color: #333;
+    border: 1px solid #444;
+    color: white;
+    border-radius: 4px;
+    font-size: 0.85rem;
+}
+
+.effects-add-row .effects-add-btn {
+    padding: 6px 14px;
+    background-color: #4CAF50;
+    border: none;
+    color: white;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.effects-add-row .effects-add-btn:hover {
+    background-color: #45a049;
+}
+
+.effects-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.effects-list .effect-slot {
+    background-color: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.effects-list .effect-slot.active {
+    border-color: #4CAF50;
+}
+
+.effects-list .effect-slot.bypassed {
+    opacity: 0.5;
+    border-style: dashed;
+}
+
+.effects-list .effect-slot-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.effects-list .effect-slot-name {
+    font-size: 0.85rem;
+    font-weight: bold;
+    color: #4CAF50;
+    flex-grow: 1;
+}
+
+.effects-list .effect-toggle-btn {
+    padding: 2px 10px;
+    background-color: #4CAF50;
+    border: none;
+    color: white;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: bold;
+}
+
+.effects-list .effect-slot.bypassed .effect-toggle-btn {
+    background-color: #555;
+}
+
+.effects-list .effect-reorder-btn {
+    padding: 2px 6px;
     background-color: #333;
     border: none;
     color: #888;
     cursor: pointer;
-    border-radius: 2px;
-    font-size: 0.55rem;
+    border-radius: 3px;
+    font-size: 0.65rem;
 }
 
-.effect-reorder button:hover {
+.effects-list .effect-reorder-btn:hover:not(:disabled) {
     background-color: #444;
     color: white;
 }
 
-.effect-params {
+.effects-list .effect-reorder-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.effects-list .effect-remove-btn {
+    padding: 2px 6px;
+    background-color: transparent;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 0.8rem;
+}
+
+.effects-list .effect-remove-btn:hover {
+    background-color: #f44336;
+    color: white;
+}
+
+.effects-list .effect-params {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
+    padding-top: 4px;
+    border-top: 1px solid #333;
 }
 
-.effect-param-row {
+.effects-list .effect-param-row {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
 }
 
-.effect-param-row label {
-    font-size: 0.6rem;
+.effects-list .effect-param-row label {
+    font-size: 0.7rem;
     color: #888;
-    width: 32px;
+    width: 45px;
     white-space: nowrap;
 }
 
-.effect-param-row input[type="range"] {
+.effects-list .effect-param-row input[type="range"] {
     flex-grow: 1;
-    height: 3px;
+    height: 4px;
     -webkit-appearance: none;
     background: #444;
     border-radius: 2px;
     min-width: 0;
 }
 
-.effect-param-row input[type="range"]::-webkit-slider-thumb {
+.effects-list .effect-param-row input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     background: #4CAF50;
     border-radius: 50%;
     cursor: pointer;
 }
 
-.effect-param-value {
-    font-size: 0.6rem;
+.effects-list .effect-param-value {
+    font-size: 0.7rem;
     color: #aaa;
-    min-width: 30px;
+    min-width: 40px;
     text-align: right;
     font-family: monospace;
 }
 
-/* Effect Menu */
-.effect-menu {
+/* Panel Empty State */
+.panel-empty {
+    color: #666;
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 30px 20px;
+    line-height: 1.6;
+}
+
+/* Lyrics Textarea */
+.lyrics-textarea {
+    width: 100%;
+    height: 100%;
+    min-height: 150px;
+    padding: 10px;
     background-color: #2a2a2a;
     border: 1px solid #444;
-    border-radius: 5px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    overflow: hidden;
-    min-width: 120px;
+    color: #e0e0e0;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 0.9rem;
+    resize: vertical;
+    line-height: 1.5;
 }
 
-.effect-menu-item {
-    display: block;
-    width: 100%;
-    padding: 8px 12px;
-    background: none;
-    border: none;
-    color: #ccc;
-    cursor: pointer;
-    text-align: left;
-    font-size: 0.8rem;
-    transition: background 0.15s;
+.lyrics-textarea:focus {
+    outline: none;
+    border-color: #4CAF50;
 }
 
-.effect-menu-item:hover {
-    background-color: #4CAF50;
-    color: white;
+/* Shortcuts Panel */
+.shortcuts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.shortcut-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.shortcut-row kbd {
+    display: inline-block;
+    padding: 4px 10px;
+    background-color: #333;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-family: monospace;
+    font-size: 0.85rem;
+    min-width: 60px;
+    text-align: center;
+}
+
+.shortcut-row span {
+    color: #aaa;
+    font-size: 0.85rem;
 }
 
 /* Permission Modal */

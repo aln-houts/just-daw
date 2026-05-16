@@ -12,7 +12,7 @@ class JustDAW {
         this.isRecording = false;
         this.isLooping = false;
         this.loopStart = 0;
-        this.loopEnd = 16; // 16 beats default
+        this.loopEnd = 16;
         this.currentTime = 0;
         this.bpm = 120;
         this.playStartTime = 0;
@@ -22,16 +22,20 @@ class JustDAW {
         this.pixelsPerSecond = 50;
         this.timelineScrollLeft = 0;
         
-        // Tracks - now with blocks (clips) instead of single audioBuffer
+        // Tracks
         this.tracks = [];
         this.nextTrackId = 1;
         this.nextBlockId = 1;
+        this.selectedTrackId = null;
         
         // Mic input sources
         this.audioInputDevices = [];
         
         // Drag state
         this.isDraggingPlayhead = false;
+        
+        // Bottom panel state
+        this.activePanel = null; // 'effects' | 'editor' | 'lyrics' | 'shortcuts' | null
         
         // UI Elements
         this.elements = {
@@ -48,7 +52,12 @@ class JustDAW {
             timelineRuler: document.getElementById('timeline-ruler'),
             timelineArea: document.querySelector('.timeline-area'),
             masterMeter: document.getElementById('master-meter'),
-            dropZone: document.getElementById('drop-zone')
+            dropZone: document.getElementById('drop-zone'),
+            toolTray: document.querySelector('.tool-tray'),
+            bottomPanel: document.getElementById('bottom-panel'),
+            bottomPanelContent: document.getElementById('bottom-panel-content'),
+            bottomPanelTitle: document.getElementById('bottom-panel-title'),
+            bottomPanelClose: document.getElementById('bottom-panel-close')
         };
         
         this.init();
@@ -57,12 +66,13 @@ class JustDAW {
     async init() {
         this.setupEventListeners();
         this.initAudio();
-        this.addTrack(); // Start with one track
+        this.addTrack();
         this.startRenderLoop();
         this.renderRuler();
         this.checkMicPermission();
         this.setupResizeHandler();
         this.setupPlayheadDrag();
+        this.setupToolTray();
     }
     
     setupResizeHandler() {
@@ -93,7 +103,6 @@ class JustDAW {
             }
         }
         
-        // Fallback: try to get a stream to check permission
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             stream.getTracks().forEach(t => t.stop());
@@ -113,7 +122,6 @@ class JustDAW {
         try {
             const devices = await navigator.mediaDevices.enumerateDevices();
             this.audioInputDevices = devices.filter(d => d.kind === 'audioinput');
-            // Re-render all track headers to show input selectors
             this.refreshAllTrackInputSelectors();
         } catch (e) {
             console.error('Could not enumerate devices:', e);
@@ -130,41 +138,27 @@ class JustDAW {
         const header = document.getElementById(`header-${track.id}`);
         if (!header) return;
         
-        // Remove existing input selector for this track
-        const existing = header.querySelector('.track-input-selector');
-        if (existing) existing.remove();
+        const select = header.querySelector(`#input-select-${track.id}`);
         
-        if (this.audioInputDevices.length === 0) return;
-        
-        const container = document.createElement('div');
-        container.className = 'track-input-selector';
-        
-        const label = document.createElement('label');
-        label.textContent = 'Input:';
-        
-        const select = document.createElement('select');
-        select.id = `input-select-${track.id}`;
-        
-        this.audioInputDevices.forEach((device, idx) => {
-            const option = document.createElement('option');
-            option.value = device.deviceId;
-            option.textContent = device.label || `Mic ${idx + 1}`;
-            select.appendChild(option);
-        });
-        
-        // Set current value
-        select.value = track.inputDeviceId || (this.audioInputDevices[0] ? this.audioInputDevices[0].deviceId : '');
-        
-        select.addEventListener('change', (e) => {
-            track.inputDeviceId = e.target.value;
-        });
-        
-        container.appendChild(label);
-        container.appendChild(select);
-        
-        // Insert after track controls, before faders
-        const controls = header.querySelector('.track-controls');
-        controls.after(container);
+        if (select) {
+            // Just update existing select options
+            const currentValue = select.value;
+            
+            // Clear all except default
+            while (select.options.length > 1) {
+                select.remove(1);
+            }
+            
+            this.audioInputDevices.forEach((device, idx) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.textContent = device.label || `Mic ${idx + 1}`;
+                select.appendChild(option);
+            });
+            
+            select.value = currentValue;
+        }
+        // The select is already in the HTML template, so we just populate it
     }
     
     updateMicPermissionUI(state) {
@@ -286,6 +280,11 @@ class JustDAW {
         this.elements.bpmInput.addEventListener('change', (e) => this.setBPM(e.target.value));
         this.elements.masterVol.addEventListener('input', (e) => this.setMasterVolume(e.target.value));
         
+        // Bottom panel close
+        if (this.elements.bottomPanelClose) {
+            this.elements.bottomPanelClose.addEventListener('click', () => this.closeBottomPanel());
+        }
+        
         // Timeline scroll sync with ruler
         this.elements.timelineGrid.addEventListener('scroll', (e) => {
             this.timelineScrollLeft = e.target.scrollLeft;
@@ -315,7 +314,7 @@ class JustDAW {
         
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT') return;
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
             
             switch(e.code) {
                 case 'Space':
@@ -330,17 +329,233 @@ class JustDAW {
                 case 'KeyL':
                     this.toggleLoop();
                     break;
+                case 'Escape':
+                    this.closeBottomPanel();
+                    break;
             }
         });
+    }
+    
+    setupToolTray() {
+        const buttons = this.elements.toolTray.querySelectorAll('.tool-btn');
+        const panelMap = {
+            'Fx Effects': 'effects',
+            'Editor': 'editor',
+            'Lyrics/Notes': 'lyrics',
+            'Shortcuts': 'shortcuts'
+        };
+        
+        buttons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const panel = panelMap[btn.textContent.trim()];
+                if (panel) {
+                    if (this.activePanel === panel) {
+                        this.closeBottomPanel();
+                    } else {
+                        this.openBottomPanel(panel);
+                    }
+                }
+            });
+        });
+    }
+    
+    openBottomPanel(panel) {
+        this.activePanel = panel;
+        const content = this.elements.bottomPanelContent;
+        content.innerHTML = '';
+        
+        // Update active button state
+        const buttons = this.elements.toolTray.querySelectorAll('.tool-btn');
+        buttons.forEach(btn => {
+            btn.classList.toggle('active', btn.textContent.trim().toLowerCase().includes(panel) ||
+                (panel === 'effects' && btn.textContent.trim() === 'Fx Effects'));
+        });
+        
+        switch(panel) {
+            case 'effects':
+                this.elements.bottomPanelTitle.textContent = 'Effects';
+                this.renderEffectsPanel(content);
+                break;
+            case 'editor':
+                this.elements.bottomPanelTitle.textContent = 'Editor';
+                this.renderEditorPanel(content);
+                break;
+            case 'lyrics':
+                this.elements.bottomPanelTitle.textContent = 'Lyrics/Notes';
+                this.renderLyricsPanel(content);
+                break;
+            case 'shortcuts':
+                this.elements.bottomPanelTitle.textContent = 'Shortcuts';
+                this.renderShortcutsPanel(content);
+                break;
+        }
+        
+        this.elements.bottomPanel.classList.add('open');
+    }
+    
+    closeBottomPanel() {
+        this.activePanel = null;
+        this.elements.bottomPanel.classList.remove('open');
+        const buttons = this.elements.toolTray.querySelectorAll('.tool-btn');
+        buttons.forEach(btn => btn.classList.remove('active'));
+    }
+    
+    renderEffectsPanel(container) {
+        const track = this.tracks.find(t => t.id === this.selectedTrackId);
+        
+        if (!track) {
+            container.innerHTML = '<div class="panel-empty">Select a track to manage its effects. Click on a track header to select it.</div>';
+            return;
+        }
+        
+        const wrapper = document.createElement('div');
+        wrapper.className = 'effects-panel';
+        
+        // Track info
+        const trackInfo = document.createElement('div');
+        trackInfo.className = 'effects-track-info';
+        trackInfo.textContent = `Track: ${track.name}`;
+        wrapper.appendChild(trackInfo);
+        
+        // Add effect button
+        const addRow = document.createElement('div');
+        addRow.className = 'effects-add-row';
+        
+        const select = document.createElement('select');
+        select.className = 'effects-type-select';
+        EffectFactory.getAvailableTypes().forEach(type => {
+            const opt = document.createElement('option');
+            opt.value = type;
+            opt.textContent = EffectFactory.getDisplayName(type);
+            select.appendChild(opt);
+        });
+        addRow.appendChild(select);
+        
+        const addBtn = document.createElement('button');
+        addBtn.className = 'effects-add-btn';
+        addBtn.textContent = '+ Add Effect';
+        addBtn.onclick = () => {
+            this.addEffectToTrack(track.id, select.value);
+            this.renderEffectsPanel(container);
+        };
+        addRow.appendChild(addBtn);
+        wrapper.appendChild(addRow);
+        
+        // Effects list
+        if (track.effects.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'panel-empty';
+            empty.textContent = 'No effects added. Select an effect type above and click "+ Add Effect".';
+            wrapper.appendChild(empty);
+        } else {
+            const list = document.createElement('div');
+            list.className = 'effects-list';
+            
+            track.effects.forEach((effect, index) => {
+                const slot = document.createElement('div');
+                slot.className = `effect-slot ${effect.enabled ? 'active' : 'bypassed'}`;
+                
+                // Top row: name, toggle, reorder, remove
+                const topRow = document.createElement('div');
+                topRow.className = 'effect-slot-top';
+                
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'effect-slot-name';
+                nameSpan.textContent = EffectFactory.getDisplayName(effect.type);
+                topRow.appendChild(nameSpan);
+                
+                const toggleBtn = document.createElement('button');
+                toggleBtn.className = 'effect-toggle-btn';
+                toggleBtn.textContent = effect.enabled ? 'ON' : 'OFF';
+                toggleBtn.onclick = () => {
+                    this.toggleEffect(track.id, effect.id);
+                    this.renderEffectsPanel(container);
+                };
+                topRow.appendChild(toggleBtn);
+                
+                const upBtn = document.createElement('button');
+                upBtn.className = 'effect-reorder-btn';
+                upBtn.textContent = '▲';
+                upBtn.disabled = index === 0;
+                upBtn.onclick = () => {
+                    this.moveEffect(track.id, effect.id, -1);
+                    this.renderEffectsPanel(container);
+                };
+                topRow.appendChild(upBtn);
+                
+                const downBtn = document.createElement('button');
+                downBtn.className = 'effect-reorder-btn';
+                downBtn.textContent = '▼';
+                downBtn.disabled = index === track.effects.length - 1;
+                downBtn.onclick = () => {
+                    this.moveEffect(track.id, effect.id, 1);
+                    this.renderEffectsPanel(container);
+                };
+                topRow.appendChild(downBtn);
+                
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'effect-remove-btn';
+                removeBtn.textContent = '✕';
+                removeBtn.onclick = () => {
+                    this.removeEffectFromTrack(track.id, effect.id);
+                    this.renderEffectsPanel(container);
+                };
+                topRow.appendChild(removeBtn);
+                
+                slot.appendChild(topRow);
+                
+                // Parameters
+                const paramsContainer = document.createElement('div');
+                paramsContainer.className = 'effect-params';
+                effect.renderUI(paramsContainer, track.id, effect.id, this);
+                slot.appendChild(paramsContainer);
+                
+                list.appendChild(slot);
+            });
+            
+            wrapper.appendChild(list);
+        }
+        
+        container.appendChild(wrapper);
+    }
+    
+    renderEditorPanel(container) {
+        container.innerHTML = `
+            <div class="panel-empty">
+                <p><strong>Track Editor</strong></p>
+                <p style="margin-top:8px">Select a track to edit its properties.</p>
+                ${this.selectedTrackId ? `<p style="margin-top:8px;color:#4CAF40">Track ${this.selectedTrackId} selected</p>` : ''}
+            </div>
+        `;
+    }
+    
+    renderLyricsPanel(container) {
+        const textarea = document.createElement('textarea');
+        textarea.className = 'lyrics-textarea';
+        textarea.placeholder = 'Write lyrics or notes here...';
+        textarea.value = this._lyricsText || '';
+        textarea.addEventListener('input', (e) => {
+            this._lyricsText = e.target.value;
+        });
+        container.appendChild(textarea);
+    }
+    
+    renderShortcutsPanel(container) {
+        container.innerHTML = `
+            <div class="shortcuts-list">
+                <div class="shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
+                <div class="shortcut-row"><kbd>R</kbd><span>Toggle Recording</span></div>
+                <div class="shortcut-row"><kbd>L</kbd><span>Toggle Loop</span></div>
+                <div class="shortcut-row"><kbd>Esc</kbd><span>Close Panel</span></div>
+            </div>
+        `;
     }
     
     setupPlayheadDrag() {
         const ruler = this.elements.timelineRuler;
         const grid = this.elements.timelineGrid;
         
-        // Handle mouse down on ruler or grid to start dragging playhead
         const onMouseDown = (e) => {
-            // Only start drag if clicking on the ruler area or the grid area (not on blocks)
             const target = e.target;
             if (target.closest('.audio-block')) return;
             
@@ -368,7 +583,6 @@ class JustDAW {
     }
     
     setPlayheadFromMouse(e) {
-        // Determine which element was clicked to calculate correct offset
         const target = e.currentTarget || e.target;
         const rect = target.closest('.timeline-area').querySelector('.timeline-grid').getBoundingClientRect();
         const scrollLeft = this.elements.timelineGrid.scrollLeft;
@@ -377,7 +591,6 @@ class JustDAW {
         
         const wasPlaying = this.isPlaying;
         if (wasPlaying) {
-            // Stop current playback
             this.tracks.forEach(track => {
                 if (track.sourceNode) {
                     try { track.sourceNode.stop(); } catch (e) {}
@@ -392,8 +605,27 @@ class JustDAW {
         this.updatePlayheadPosition();
         
         if (wasPlaying) {
-            // Restart playback from new position
             this.playFromCurrentTime();
+        }
+    }
+    
+    selectTrack(trackId) {
+        // Deselect previous
+        if (this.selectedTrackId) {
+            const prevHeader = document.getElementById(`header-${this.selectedTrackId}`);
+            if (prevHeader) prevHeader.classList.remove('selected');
+        }
+        
+        this.selectedTrackId = trackId;
+        
+        if (trackId) {
+            const header = document.getElementById(`header-${trackId}`);
+            if (header) header.classList.add('selected');
+        }
+        
+        // If effects panel is open, refresh it
+        if (this.activePanel === 'effects') {
+            this.openBottomPanel('effects');
         }
     }
     
@@ -407,7 +639,7 @@ class JustDAW {
             muted: false,
             soloed: false,
             armed: false,
-            blocks: [], // Array of audio blocks instead of single audioBuffer
+            blocks: [],
             sourceNode: null,
             gainNode: this.audioContext.createGain(),
             panNode: this.audioContext.createStereoPanner(),
@@ -416,18 +648,20 @@ class JustDAW {
             chunks: [],
             recordingStartTime: null,
             recordingBlockId: null,
-            inputDeviceId: this.audioInputDevices.length > 0 ? this.audioInputDevices[0].deviceId : null,
-            effects: [], // Array of effect instances
+            inputDeviceId: null,
+            effects: [],
             nextEffectId: 1
         };
         
-        // Connect audio graph: gain -> [effects chain] -> pan -> master
         this.rebuildTrackAudioGraph(track);
         
         this.tracks.push(track);
         this.renderTrackHeader(track);
         this.renderTrackRow(track);
         this.updateTrackAudio(track);
+        
+        // Auto-select new track
+        this.selectTrack(trackId);
     }
     
     deleteTrack(trackId) {
@@ -445,9 +679,14 @@ class JustDAW {
             }
             track.gainNode.disconnect();
             track.panNode.disconnect();
+            track.effects.forEach(e => e.disconnect());
             this.tracks.splice(index, 1);
             
-            // Remove UI
+            if (this.selectedTrackId === trackId) {
+                this.selectedTrackId = this.tracks.length > 0 ? this.tracks[0].id : null;
+                if (this.selectedTrackId) this.selectTrack(this.selectedTrackId);
+            }
+            
             const header = document.getElementById(`header-${trackId}`);
             const row = document.getElementById(`row-${trackId}`);
             if (header) header.remove();
@@ -455,19 +694,15 @@ class JustDAW {
         }
     }
     
-    // Rebuild the audio graph for a track: gain -> [effects] -> pan -> master
     rebuildTrackAudioGraph(track) {
-        // Disconnect existing connections
         try { track.gainNode.disconnect(); } catch (e) {}
         try { track.panNode.disconnect(); } catch (e) {}
         track.effects.forEach(effect => effect.disconnect());
 
         if (track.effects.length === 0) {
-            // No effects: gain -> pan -> master
             track.gainNode.connect(track.panNode);
             track.panNode.connect(this.masterGain);
         } else {
-            // gain -> effect1 -> effect2 -> ... -> pan -> master
             track.gainNode.connect(track.effects[0].nodes[0] || track.panNode);
             for (let i = 0; i < track.effects.length; i++) {
                 const nextTarget = i < track.effects.length - 1
@@ -489,7 +724,6 @@ class JustDAW {
         effect.id = track.nextEffectId++;
         track.effects.push(effect);
         this.rebuildTrackAudioGraph(track);
-        this.renderEffectsRack(track);
     }
 
     removeEffectFromTrack(trackId, effectId) {
@@ -501,7 +735,6 @@ class JustDAW {
             track.effects[index].disconnect();
             track.effects.splice(index, 1);
             this.rebuildTrackAudioGraph(track);
-            this.renderEffectsRack(track);
         }
     }
 
@@ -513,7 +746,6 @@ class JustDAW {
         if (effect) {
             effect.toggle();
             this.rebuildTrackAudioGraph(track);
-            this.renderEffectsRack(track);
         }
     }
 
@@ -527,238 +759,97 @@ class JustDAW {
         const newIndex = index + direction;
         if (newIndex < 0 || newIndex >= track.effects.length) return;
 
-        // Swap
         [track.effects[index], track.effects[newIndex]] = [track.effects[newIndex], track.effects[index]];
         this.rebuildTrackAudioGraph(track);
-        this.renderEffectsRack(track);
     }
-
-    renderEffectsRack(track) {
-        const header = document.getElementById(`header-${track.id}`);
-        if (!header) return;
-
-        // Remove existing rack
-        const existingRack = header.querySelector('.effects-rack');
-        if (existingRack) existingRack.remove();
-
-        const rack = document.createElement('div');
-        rack.className = 'effects-rack';
-
-        // Add effect button
-        const addBtn = document.createElement('button');
-        addBtn.className = 'effects-add-btn';
-        addBtn.textContent = '+ Effect';
-        addBtn.title = 'Add effect';
-        addBtn.onclick = (e) => {
-            e.stopPropagation();
-            this.showEffectMenu(track.id, addBtn);
-        };
-        rack.appendChild(addBtn);
-
-        // Render each effect
-        track.effects.forEach((effect, index) => {
-            const slot = document.createElement('div');
-            slot.className = `effect-slot ${effect.enabled ? 'active' : 'bypassed'}`;
-
-            const topRow = document.createElement('div');
-            topRow.className = 'effect-slot-top';
-
-            const nameSpan = document.createElement('span');
-            nameSpan.className = 'effect-slot-name';
-            nameSpan.textContent = EffectFactory.getDisplayName(effect.type);
-            topRow.appendChild(nameSpan);
-
-            const toggleBtn = document.createElement('button');
-            toggleBtn.className = 'effect-toggle-btn';
-            toggleBtn.textContent = effect.enabled ? 'ON' : 'OFF';
-            toggleBtn.title = 'Toggle effect';
-            toggleBtn.onclick = (e) => {
-                e.stopPropagation();
-                this.toggleEffect(track.id, effect.id);
-            };
-            topRow.appendChild(toggleBtn);
-
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'effect-remove-btn';
-            removeBtn.textContent = '✕';
-            removeBtn.title = 'Remove effect';
-            removeBtn.onclick = (e) => {
-                e.stopPropagation();
-                this.removeEffectFromTrack(track.id, effect.id);
-            };
-            topRow.appendChild(removeBtn);
-
-            slot.appendChild(topRow);
-
-            // Reorder buttons
-            const reorderRow = document.createElement('div');
-            reorderRow.className = 'effect-reorder';
-
-            const upBtn = document.createElement('button');
-            upBtn.textContent = '▲';
-            upBtn.title = 'Move up';
-            upBtn.onclick = (e) => {
-                e.stopPropagation();
-                this.moveEffect(track.id, effect.id, -1);
-            };
-            reorderRow.appendChild(upBtn);
-
-            const downBtn = document.createElement('button');
-            downBtn.textContent = '▼';
-            downBtn.title = 'Move down';
-            downBtn.onclick = (e) => {
-                e.stopPropagation();
-                this.moveEffect(track.id, effect.id, 1);
-            };
-            reorderRow.appendChild(downBtn);
-
-            slot.appendChild(reorderRow);
-
-            // Effect parameters
-            const paramsContainer = document.createElement('div');
-            paramsContainer.className = 'effect-params';
-            effect.renderUI(paramsContainer, track.id, effect.id, this);
-            slot.appendChild(paramsContainer);
-
-            rack.appendChild(slot);
-        });
-
-        // Insert rack after faders
-        const faders = header.querySelector('.track-faders');
-        if (faders) {
-            faders.after(rack);
-        } else {
-            header.appendChild(rack);
-        }
-    }
-
-    showEffectMenu(trackId, anchorBtn) {
-        // Remove existing menu
-        const existing = document.getElementById('effect-menu');
-        if (existing) existing.remove();
-
-        const menu = document.createElement('div');
-        menu.id = 'effect-menu';
-        menu.className = 'effect-menu';
-
-        EffectFactory.getAvailableTypes().forEach(type => {
-            const item = document.createElement('button');
-            item.className = 'effect-menu-item';
-            item.textContent = EffectFactory.getDisplayName(type);
-            item.onclick = (e) => {
-                e.stopPropagation();
-                this.addEffectToTrack(trackId, type);
-                menu.remove();
-            };
-            menu.appendChild(item);
-        });
-
-        // Position near the button
-        const rect = anchorBtn.getBoundingClientRect();
-        menu.style.position = 'fixed';
-        menu.style.left = `${rect.left}px`;
-        menu.style.top = `${rect.bottom + 4}px`;
-        menu.style.zIndex = '500';
-
-        document.body.appendChild(menu);
-
-        // Close on outside click
-        const closeMenu = (e) => {
-            if (!menu.contains(e.target)) {
-                menu.remove();
-                document.removeEventListener('click', closeMenu);
-            }
-        };
-        setTimeout(() => document.addEventListener('click', closeMenu), 0);
-    }
-
+    
     renderTrackHeader(track) {
         const header = document.createElement('div');
         header.className = 'track-header';
+        if (track.id === this.selectedTrackId) header.classList.add('selected');
         header.id = `header-${track.id}`;
+        
+        // Click to select track
+        header.addEventListener('click', (e) => {
+            // Don't select if clicking on buttons/inputs
+            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            this.selectTrack(track.id);
+        });
+        
         header.innerHTML = `
             <div class="track-header-top">
-                <span class="track-name" id="name-${track.id}" onclick="daw.editTrackName(${track.id})">${track.name}</span>
-                <button class="delete-track-btn" onclick="daw.deleteTrack(${track.id})" title="Delete Track">✕</button>
+                <span class="track-name" id="name-${track.id}">${track.name}</span>
+                <button class="delete-track-btn" data-track-id="${track.id}" title="Delete Track">✕</button>
             </div>
             <div class="track-controls">
-                <button id="mute-${track.id}" class="mute-btn" onclick="daw.toggleMute(${track.id})" title="Mute">M</button>
-                <button id="solo-${track.id}" class="solo-btn" onclick="daw.toggleSolo(${track.id})" title="Solo">S</button>
-                <button id="arm-${track.id}" class="arm-btn" onclick="daw.toggleArm(${track.id})" title="Record Arm">R</button>
+                <button id="mute-${track.id}" class="mute-btn" title="Mute">M</button>
+                <button id="solo-${track.id}" class="solo-btn" title="Solo">S</button>
+                <button id="arm-${track.id}" class="arm-btn" title="Record Arm">R</button>
+            </div>
+            <div class="track-input-selector">
+                <label>Input:</label>
+                <select id="input-select-${track.id}">
+                    <option value="">Default</option>
+                </select>
             </div>
             <div class="track-faders">
                 <div class="fader-row">
                     <label>Vol</label>
-                    <input type="range" min="0" max="1" step="0.01" value="${track.volume}"
-                           oninput="daw.setTrackVolume(${track.id}, this.value)">
+                    <input type="range" min="0" max="1" step="0.01" value="${track.volume}">
                 </div>
                 <div class="fader-row">
                     <label>Pan</label>
-                    <input type="range" min="-1" max="1" step="0.01" value="${track.pan}"
-                           oninput="daw.setTrackPan(${track.id}, this.value)">
+                    <input type="range" min="-1" max="1" step="0.01" value="${track.pan}">
                 </div>
             </div>
+            <div class="track-effects-indicator" id="effects-ind-${track.id}">
+                ${track.effects.length > 0 ? `<span class="effects-badge">${track.effects.length} FX</span>` : ''}
+            </div>
         `;
+        
         this.elements.trackHeaders.appendChild(header);
         
-        // Render input selector for this track
-        this.renderTrackInputSelector(track);
-        
-        // Render effects rack
-        this.renderEffectsRack(track);
-    }
-    
-    editTrackName(trackId) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (!track) return;
-        
-        const nameEl = document.getElementById(`name-${trackId}`);
-        const currentName = track.name;
-        
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.value = currentName;
-        input.className = 'track-name-input';
-        input.style.width = '100%';
-        input.style.background = '#333';
-        input.style.border = '1px solid #4CAF50';
-        input.style.color = 'white';
-        input.style.padding = '2px 5px';
-        input.style.borderRadius = '3px';
-        input.style.fontSize = '0.9rem';
-        
-        nameEl.replaceWith(input);
-        input.focus();
-        input.select();
-        
-        const saveName = () => {
-            const newName = input.value.trim() || currentName;
-            track.name = newName;
-            nameEl.textContent = newName;
-            input.replaceWith(nameEl);
-        };
-        
-        input.addEventListener('blur', saveName);
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                input.blur();
-            } else if (e.key === 'Escape') {
-                input.value = currentName;
-                input.blur();
-            }
+        // Wire up controls
+        header.querySelector('.delete-track-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.deleteTrack(track.id);
         });
+        header.querySelector('.mute-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleMute(track.id);
+        });
+        header.querySelector('.solo-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleSolo(track.id);
+        });
+        header.querySelector('.arm-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleArm(track.id);
+        });
+        header.querySelector('.track-faders input[type="range"]').addEventListener('input', (e) => {
+            e.stopPropagation();
+            this.setTrackVolume(track.id, e.target.value);
+        });
+        header.querySelectorAll('.track-faders input[type="range"]')[1].addEventListener('input', (e) => {
+            e.stopPropagation();
+            this.setTrackPan(track.id, e.target.value);
+        });
+        header.querySelector('#input-select-' + track.id).addEventListener('change', (e) => {
+            e.stopPropagation();
+            track.inputDeviceId = e.target.value || null;
+        });
+        
+        // Populate input selector
+        this.renderTrackInputSelector(track);
     }
     
     renderTrackRow(track) {
         const row = document.createElement('div');
         row.className = 'track-row';
         row.id = `row-${track.id}`;
-        row.innerHTML = `
-            <canvas id="canvas-${track.id}"></canvas>
-        `;
+        row.innerHTML = `<canvas id="canvas-${track.id}"></canvas>`;
         this.elements.timelineGrid.appendChild(row);
         
-        // Set canvas size after adding to DOM
         requestAnimationFrame(() => this.setupCanvas(track));
     }
     
@@ -784,7 +875,6 @@ class JustDAW {
         ctx.fillStyle = '#1e1e1e';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        // Draw center line
         ctx.strokeStyle = '#333';
         ctx.beginPath();
         ctx.moveTo(0, canvas.height / 2);
@@ -939,14 +1029,12 @@ class JustDAW {
     }
     
     playFromCurrentTime() {
-        // Start sources for all tracks with blocks that overlap currentTime
         this.tracks.forEach(track => {
             if (track.sourceNode) {
                 try { track.sourceNode.stop(); } catch (e) {}
                 track.sourceNode = null;
             }
             
-            // Find blocks that should be playing at currentTime
             track.blocks.forEach(block => {
                 if (this.currentTime >= block.startTime && this.currentTime < block.endTime) {
                     const sourceNode = this.audioContext.createBufferSource();
@@ -984,7 +1072,6 @@ class JustDAW {
     }
     
     stop() {
-        const wasPlaying = this.isPlaying;
         this.isPlaying = false;
         this.isRecording = false;
         this.currentTime = 0;
@@ -1021,7 +1108,6 @@ class JustDAW {
     }
     
     async startRecording() {
-        // Check if we have permission first
         if (!this.micPermissionGranted) {
             try {
                 const result = await navigator.permissions.query({ name: 'microphone' });
@@ -1029,9 +1115,7 @@ class JustDAW {
                     this.showPermissionDeniedModal();
                     return;
                 }
-            } catch (e) {
-                // permissions API not supported, try requesting directly
-            }
+            } catch (e) {}
             
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1045,7 +1129,6 @@ class JustDAW {
             }
         }
         
-        // Check for armed tracks
         const armedTracks = this.tracks.filter(t => t.armed);
         if (armedTracks.length === 0) {
             alert('Please arm at least one track (click the R button) before recording.');
@@ -1055,15 +1138,12 @@ class JustDAW {
         this.isRecording = true;
         this.elements.recordBtn.classList.add('active');
         
-        // Record start time for block positioning
         const recordStartTime = this.isPlaying ? this.currentTime : 0;
         
-        // Start recording on armed tracks
         for (const track of armedTracks) {
             await this.startTrackRecording(track, recordStartTime);
         }
         
-        // Auto-play during recording if not already playing
         if (!this.isPlaying) {
             this.playStartTime = this.audioContext.currentTime;
             this.currentTime = 0;
@@ -1081,7 +1161,6 @@ class JustDAW {
                 }
             };
             
-            // Use track's selected input device if available
             if (track.inputDeviceId) {
                 constraints.audio.deviceId = { exact: track.inputDeviceId };
             }
@@ -1112,7 +1191,6 @@ class JustDAW {
                     try {
                         const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
                         
-                        // Create a new audio block
                         const block = {
                             id: this.nextBlockId++,
                             audioBuffer: audioBuffer,
@@ -1165,18 +1243,15 @@ class JustDAW {
         
         this.currentTime = this.audioContext.currentTime - this.playStartTime;
         
-        // Handle loop boundary
         if (this.isLooping && this.currentTime >= this.loopEnd) {
             this.currentTime = this.loopStart;
             this.playStartTime = this.audioContext.currentTime - this.loopStart;
             
-            // Restart all sources
             this.tracks.forEach(track => {
                 if (track.sourceNode) {
                     try { track.sourceNode.stop(); } catch (e) {}
                     track.sourceNode = null;
                 }
-                // Find and play blocks at loop start
                 track.blocks.forEach(block => {
                     if (this.currentTime >= block.startTime && this.currentTime < block.endTime) {
                         const sourceNode = this.audioContext.createBufferSource();
@@ -1199,11 +1274,9 @@ class JustDAW {
     }
     
     updatePlayheadPosition() {
-        // Remove existing playhead
         const existingPlayhead = document.querySelector('.playhead');
         if (existingPlayhead) existingPlayhead.remove();
         
-        // Create playhead in timeline area
         const playhead = document.createElement('div');
         playhead.className = 'playhead';
         playhead.style.left = `${this.currentTime * this.pixelsPerSecond}px`;
@@ -1214,7 +1287,6 @@ class JustDAW {
         const row = document.getElementById(`row-${track.id}`);
         if (!row) return;
         
-        // Remove existing block element if any (for same block id)
         const existingBlock = document.getElementById(`block-${block.id}`);
         if (existingBlock) existingBlock.remove();
         
@@ -1224,13 +1296,11 @@ class JustDAW {
         blockEl.style.left = `${block.startTime * this.pixelsPerSecond}px`;
         blockEl.style.width = `${block.duration * this.pixelsPerSecond}px`;
         
-        // Block label
         const label = document.createElement('span');
         label.className = 'audio-block-label';
         label.textContent = `Recording ${block.id}`;
         blockEl.appendChild(label);
         
-        // Delete button
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'audio-block-delete';
         deleteBtn.textContent = '✕';
@@ -1252,11 +1322,9 @@ class JustDAW {
         if (blockIndex > -1) {
             track.blocks.splice(blockIndex, 1);
             
-            // Remove block element
             const blockEl = document.getElementById(`block-${blockId}`);
             if (blockEl) blockEl.remove();
             
-            // Redraw waveforms
             this.drawTrackWaveforms(track);
         }
     }
@@ -1265,32 +1333,23 @@ class JustDAW {
         const canvas = document.getElementById(`canvas-${track.id}`);
         if (!canvas) return;
         
-        // Ensure canvas is properly sized
         const row = document.getElementById(`row-${track.id}`);
         if (row) {
             const rect = row.getBoundingClientRect();
-            if (canvas.width !== rect.width) {
-                canvas.width = rect.width;
-            }
-            if (canvas.height !== rect.height) {
-                canvas.height = rect.height;
-            }
+            if (canvas.width !== rect.width) canvas.width = rect.width;
+            if (canvas.height !== rect.height) canvas.height = rect.height;
         }
         
         const ctx = canvas.getContext('2d');
-        
-        // Clear canvas completely
         ctx.fillStyle = '#1e1e1e';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        // Draw center line
         ctx.strokeStyle = '#333';
         ctx.beginPath();
         ctx.moveTo(0, canvas.height / 2);
         ctx.lineTo(canvas.width, canvas.height / 2);
         ctx.stroke();
         
-        // Draw waveforms for each block
         track.blocks.forEach(block => {
             this.drawBlockWaveform(ctx, canvas, block);
         });
@@ -1302,7 +1361,6 @@ class JustDAW {
         const data = block.audioBuffer.getChannelData(0);
         const amp = canvas.height / 2;
         
-        // Calculate pixel positions for this block
         const startPixel = block.startTime * this.pixelsPerSecond;
         const blockPixelWidth = block.duration * this.pixelsPerSecond;
         
@@ -1340,7 +1398,6 @@ class JustDAW {
                     const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
                     const trackId = this.nextTrackId++;
                     
-                    // Create a block for the dropped file
                     const block = {
                         id: this.nextBlockId++,
                         audioBuffer: audioBuffer,
@@ -1365,7 +1422,7 @@ class JustDAW {
                         mediaRecorder: null,
                         chunks: [],
                         recordingStartTime: null,
-                        inputDeviceId: this.audioInputDevices.length > 0 ? this.audioInputDevices[0].deviceId : null,
+                        inputDeviceId: null,
                         effects: [],
                         nextEffectId: 1
                     };
@@ -1377,7 +1434,6 @@ class JustDAW {
                     this.renderTrackRow(track);
                     this.updateTrackAudio(track);
                     
-                    // Draw waveform and block after canvas is set up
                     requestAnimationFrame(() => {
                         this.drawTrackWaveforms(track);
                         this.renderAudioBlock(track, block);
