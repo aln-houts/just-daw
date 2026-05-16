@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Just-DAW</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="description" content="A lightweight, browser-based Digital Audio Workstation">
+    <meta name="theme-color" content="#4CAF50">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Just-DAW">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="application-name" content="Just-DAW">
+    
+    <!-- Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Apple Touch Icons -->
+    <link rel="apple-touch-icon" href="icons/icon-152x152.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-192x192.png">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="icons/icon-16x16.png">
+    
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Control Bar -->
+        <header class="transport-bar">
+            <div class="transport-left">
+                <h1 class="logo">Just-DAW</h1>
+                <div class="tempo-control">
+                    <label for="bpm">BPM:</label>
+                    <input type="number" id="bpm" value="120" min="20" max="300">
+                </div>
+                <div class="time-signature">
+                    <span>4/4</span>
+                </div>
+            </div>
+            <div class="transport-center">
+                <button id="stop-btn" class="transport-btn">⏹</button>
+                <button id="play-btn" class="transport-btn">▶</button>
+                <button id="record-btn" class="transport-btn record">⏺</button>
+                <button id="loop-btn" class="transport-btn">🔁</button>
+                <div class="time-display">00:00.000</div>
+            </div>
+            <div class="transport-right">
+                <div class="master-volume">
+                    <label for="master-vol">Master:</label>
+                    <input type="range" id="master-vol" min="0" max="1" step="0.01" value="0.8">
+                </div>
+                <canvas id="master-meter" width="100" height="20"></canvas>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="workspace">
+            <!-- Left Sidebar: Track Headers -->
+            <aside class="track-sidebar">
+                <div class="sidebar-header">
+                    <button id="add-track-btn" class="add-track-btn">+ Add Track</button>
+                </div>
+                <div id="track-headers" class="track-headers">
+                    <!-- Track headers will be injected here -->
+                </div>
+            </aside>
+
+            <!-- Right Area: Timeline Grid -->
+            <section class="timeline-area">
+                <div class="timeline-ruler" id="timeline-ruler">
+                    <!-- Ruler marks will be injected here -->
+                </div>
+                <div class="timeline-grid" id="timeline-grid">
+                    <!-- Track rows will be injected here -->
+                </div>
+                <div class="drop-zone" id="drop-zone">
+                    <p>Drop audio files here (MP3, WAV, OGG)</p>
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom Tool Tray -->
+        <footer class="tool-tray">
+            <button class="tool-btn">AutoPitch</button>
+            <button class="tool-btn">Fx Effects</button>
+            <button class="tool-btn">Editor</button>
+            <button class="tool-btn">Lyrics/Notes</button>
+            <button class="tool-btn">Shortcuts</button>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
