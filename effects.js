@@ -299,7 +299,7 @@ class DistortionEffect extends EffectBase {
     }
 
     makeCurve(amt) {
-        const s = 44100;
+        const s = this.audioContext.sampleRate;
         const c = new Float32Array(s);
         const d = Math.PI / 180;
         for (let i = 0; i < s; i++) {

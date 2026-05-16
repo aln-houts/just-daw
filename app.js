@@ -24,6 +24,8 @@ class JustDAW {
         this.isDraggingPlayhead = false;
         this.activePanel = null;
         this._lyricsText = '';
+        this.micPermissionGranted = false;
+        this._meterAnimationId = null;
         
         // Block drag state
         this.dragState = null; // { blockId, trackId, startX, startStartTime }
@@ -326,7 +328,12 @@ class JustDAW {
         const map = { 'Fx Effects': 'effects', 'Editor': 'editor', 'Lyrics/Notes': 'lyrics', 'Shortcuts': 'shortcuts' };
         this.elements.toolTray.querySelectorAll('.tool-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                const panel = map[btn.textContent.trim()];
+                const text = btn.textContent.trim();
+                if (text === 'AutoPitch') {
+                    alert('AutoPitch: Select a block on a track to enable pitch correction.\n\n(Feature coming soon)');
+                    return;
+                }
+                const panel = map[text];
                 if (!panel) return;
                 if (this.activePanel === panel) this.closeBottomPanel();
                 else this.openBottomPanel(panel);
@@ -504,17 +511,35 @@ class JustDAW {
     }
     
     playFromCurrentTime() {
+        const SCHEDULE_AHEAD = 2.0; // seconds to pre-schedule
         this.tracks.forEach(track => {
             if (track.sourceNode) { try { track.sourceNode.stop(); } catch(e){} track.sourceNode = null; }
+            track.activeSources = track.activeSources || [];
+            track.activeSources.forEach(s => { try { s.stop(); } catch(e){} });
+            track.activeSources = [];
             track.blocks.forEach(block => {
+                const blockEndTime = this.isLooping ? block.endTime : block.endTime;
+                // Play blocks currently overlapping playback position
                 if (this.currentTime >= block.startTime && this.currentTime < block.endTime) {
                     const src = this.audioContext.createBufferSource();
                     src.buffer = block.audioBuffer;
                     src.connect(track.gainNode);
-                    src.start(0, this.currentTime - block.startTime, block.endTime - this.currentTime);
-                    track.sourceNode = src;
+                    const offset = this.currentTime - block.startTime;
+                    const remaining = block.endTime - this.currentTime;
+                    src.start(0, offset, remaining);
+                    track.activeSources.push(src);
+                }
+                // Pre-schedule blocks that start within the lookahead window
+                else if (block.startTime > this.currentTime && block.startTime < this.currentTime + SCHEDULE_AHEAD) {
+                    const src = this.audioContext.createBufferSource();
+                    src.buffer = block.audioBuffer;
+                    src.connect(track.gainNode);
+                    const when = block.startTime - this.currentTime;
+                    src.start(this.audioContext.currentTime + when);
+                    track.activeSources.push(src);
                 }
             });
+            track.sourceNode = track.activeSources.length > 0 ? track.activeSources[0] : null;
         });
     }
     
@@ -523,7 +548,10 @@ class JustDAW {
         this.elements.playBtn.classList.remove('active');
         this.elements.playBtn.textContent = '▶';
         this.currentTime = this.audioContext.currentTime - this.playStartTime;
-        this.tracks.forEach(t => { if (t.sourceNode) { try { t.sourceNode.stop(); } catch(e){} t.sourceNode = null; } });
+        this.tracks.forEach(t => {
+            if (t.activeSources) { t.activeSources.forEach(s => { try { s.stop(); } catch(e){} }); t.activeSources = []; }
+            t.sourceNode = null;
+        });
         if (this.animationFrameId) { cancelAnimationFrame(this.animationFrameId); this.animationFrameId = null; }
     }
     
@@ -535,7 +563,8 @@ class JustDAW {
         this.elements.playBtn.textContent = '▶';
         this.elements.recordBtn.classList.remove('active');
         this.tracks.forEach(t => {
-            if (t.sourceNode) { try { t.sourceNode.stop(); } catch(e){} t.sourceNode = null; }
+            if (t.activeSources) { t.activeSources.forEach(s => { try { s.stop(); } catch(e){} }); t.activeSources = []; }
+            t.sourceNode = null;
             if (t.mediaRecorder && t.mediaRecorder.state !== 'inactive') t.mediaRecorder.stop();
         });
         if (this.animationFrameId) { cancelAnimationFrame(this.animationFrameId); this.animationFrameId = null; }
@@ -549,16 +578,30 @@ class JustDAW {
         if (this.isLooping && this.currentTime >= this.loopEnd) {
             this.currentTime = this.loopStart;
             this.playStartTime = this.audioContext.currentTime - this.loopStart;
+            // Stop all active sources
             this.tracks.forEach(t => {
-                if (t.sourceNode) { try { t.sourceNode.stop(); } catch(e){} t.sourceNode = null; }
+                if (t.activeSources) { t.activeSources.forEach(s => { try { s.stop(); } catch(e){} }); }
+                t.activeSources = [];
+                t.sourceNode = null;
+            });
+            // Restart all blocks that fall within the loop range
+            this.tracks.forEach(t => {
                 t.blocks.forEach(b => {
-                    if (this.currentTime >= b.startTime && this.currentTime < b.endTime) {
+                    // Block overlaps with loop range at all
+                    if (b.startTime < this.loopEnd && b.endTime > this.loopStart) {
                         const s = this.audioContext.createBufferSource();
-                        s.buffer = b.audioBuffer; s.connect(t.gainNode);
-                        s.loop = true; s.loopStart = this.loopStart; s.loopEnd = this.loopEnd;
-                        s.start(0, this.loopStart); t.sourceNode = s;
+                        s.buffer = b.audioBuffer;
+                        s.connect(t.gainNode);
+                        // Calculate when this block should start relative to loop start
+                        const blockStartInLoop = Math.max(b.startTime, this.loopStart);
+                        const offsetInBlock = blockStartInLoop - b.startTime;
+                        const when = blockStartInLoop - this.loopStart;
+                        const remaining = Math.min(b.endTime, this.loopEnd) - blockStartInLoop;
+                        s.start(this.audioContext.currentTime + when, offsetInBlock, remaining);
+                        t.activeSources.push(s);
                     }
                 });
+                t.sourceNode = t.activeSources.length > 0 ? t.activeSources[0] : null;
             });
         }
         this.elements.timeDisplay.textContent = this.formatTime(this.currentTime);
@@ -634,6 +677,7 @@ class JustDAW {
             track.mediaStream = stream;
             const src = this.audioContext.createMediaStreamSource(stream);
             src.connect(track.gainNode);
+            track._recordingSourceNode = src;
             let mt = 'audio/webm';
             if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mt = 'audio/webm;codecs=opus';
             track.mediaRecorder = new MediaRecorder(stream, { mimeType: mt });
@@ -641,6 +685,7 @@ class JustDAW {
             track.recordingStartTime = t0;
             track.mediaRecorder.ondataavailable = e => { if (e.data.size > 0) track.chunks.push(e.data); };
             track.mediaRecorder.onstop = async () => {
+                if (track._recordingSourceNode) { try { track._recordingSourceNode.disconnect(); } catch(e){} track._recordingSourceNode = null; }
                 if (track.chunks.length > 0) {
                     const blob = new Blob(track.chunks, { type: mt });
                     const ab = await blob.arrayBuffer();
@@ -672,7 +717,7 @@ class JustDAW {
         const id = this.nextTrackId++;
         const track = {
             id, name: `Track ${id}`, volume: 0.8, pan: 0, muted: false, soloed: false, armed: false,
-            blocks: [], sourceNode: null,
+            blocks: [], sourceNode: null, activeSources: [],
             gainNode: this.audioContext.createGain(),
             panNode: this.audioContext.createStereoPanner(),
             mediaStream: null, mediaRecorder: null, chunks: [],
@@ -691,7 +736,8 @@ class JustDAW {
         const idx = this.tracks.findIndex(t => t.id === id);
         if (idx < 0) return;
         const t = this.tracks[idx];
-        if (t.sourceNode) try { t.sourceNode.stop(); } catch(e){}
+        if (t.activeSources) { t.activeSources.forEach(s => { try { s.stop(); } catch(e){} }); t.activeSources = []; }
+        t.sourceNode = null;
         if (t.mediaRecorder && t.mediaRecorder.state !== 'inactive') t.mediaRecorder.stop();
         if (t.mediaStream) t.mediaStream.getTracks().forEach(tr => tr.stop());
         t.gainNode.disconnect(); t.panNode.disconnect();
@@ -711,57 +757,118 @@ class JustDAW {
         try { track.gainNode.disconnect(); } catch(e){}
         try { track.panNode.disconnect(); } catch(e){}
         track.effects.forEach(e => e.disconnect());
-        if (track.effects.length === 0) {
+        // Build chain: gainNode -> [enabled effects in order] -> panNode -> masterGain
+        const enabledEffects = track.effects.filter(e => e.enabled);
+        if (enabledEffects.length === 0) {
             track.gainNode.connect(track.panNode);
             track.panNode.connect(this.masterGain);
         } else {
-            track.gainNode.connect(track.effects[0].nodes[0] || track.panNode);
-            for (let i = 0; i < track.effects.length; i++) {
-                const next = i < track.effects.length - 1 ? (track.effects[i+1].nodes[0] || track.panNode) : track.panNode;
-                track.effects[i].connect(track.effects[i].nodes[0] || track.gainNode, next);
+            track.gainNode.connect(enabledEffects[0].nodes[0] || track.panNode);
+            for (let i = 0; i < enabledEffects.length; i++) {
+                const next = i < enabledEffects.length - 1 ? (enabledEffects[i+1].nodes[0] || track.panNode) : track.panNode;
+                enabledEffects[i].connect(enabledEffects[i].nodes[0] || track.gainNode, next);
             }
             track.panNode.connect(this.masterGain);
         }
     }
     
     renderTrackHeader(track) {
+        const esc = (s) => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
         const h = document.createElement('div');
         h.className = 'track-header' + (track.id === this.selectedTrackId ? ' selected' : '');
         h.id = `header-${track.id}`;
         h.innerHTML = `
-            <div class="track-header-row">
-                <span class="track-name">${track.name}</span>
-                <div class="track-header-btns">
-                    <button class="track-fx-btn" title="Effects">FX</button>
-                    <button class="delete-track-btn" title="Delete">✕</button>
-                </div>
+            <div class="track-header-top">
+                <span class="track-name">${esc(track.name)}</span>
+                <button class="arm-btn ${track.armed ? 'active' : ''}" title="Record Arm">R</button>
             </div>
             <div class="track-controls">
-                <button class="mute-btn" title="Mute">M</button>
-                <button class="solo-btn" title="Solo">S</button>
-                <button class="arm-btn" title="Record Arm">R</button>
+                <button class="mute-btn ${track.muted ? 'active' : ''}" title="Mute">M</button>
+                <button class="solo-btn ${track.soloed ? 'active' : ''}" title="Solo">S</button>
+                <button class="track-fx-btn" title="Effects">FX</button>
+            </div>
+            <div class="track-knobs">
+                <div class="track-knob" id="vol-knob-${track.id}"></div>
+                <div class="track-knob" id="pan-knob-${track.id}"></div>
             </div>
             <div class="track-input-selector">
-                <label>In:</label>
-                <select><option value="">Default</option></select>
-            </div>
-            <div class="track-faders">
-                <div class="fader-row"><label>Vol</label><input type="range" min="0" max="1" step="0.01" value="${track.volume}"></div>
-                <div class="fader-row"><label>Pan</label><input type="range" min="-1" max="1" step="0.01" value="${track.pan}"></div>
+                <select title="Input"><option value="">Default</option></select>
             </div>
         `;
         this.elements.trackHeaders.appendChild(h);
         
-        h.querySelector('.delete-track-btn').onclick = (e) => { e.stopPropagation(); this.deleteTrack(track.id); };
+        h.querySelector('.arm-btn').onclick = (e) => { e.stopPropagation(); this.toggleArm(track.id); };
         h.querySelector('.track-fx-btn').onclick = (e) => { e.stopPropagation(); this.selectTrack(track.id); this.openBottomPanel('effects'); };
         h.querySelector('.mute-btn').onclick = (e) => { e.stopPropagation(); this.toggleMute(track.id); };
         h.querySelector('.solo-btn').onclick = (e) => { e.stopPropagation(); this.toggleSolo(track.id); };
-        h.querySelector('.arm-btn').onclick = (e) => { e.stopPropagation(); this.toggleArm(track.id); };
-        h.querySelector('.track-faders input[type="range"]').oninput = (e) => { e.stopPropagation(); this.setTrackVolume(track.id, e.target.value); };
-        h.querySelectorAll('.track-faders input[type="range"]')[1].oninput = (e) => { e.stopPropagation(); this.setTrackPan(track.id, e.target.value); };
         h.querySelector('.track-input-selector select').onchange = (e) => { e.stopPropagation(); track.inputDeviceId = e.target.value || null; };
         
+        // Build knobs
+        this.buildTrackKnob(`vol-knob-${track.id}`, track.volume, 0, 1, 0.01, v => {
+            this.setTrackVolume(track.id, v);
+        });
+        this.buildTrackKnob(`pan-knob-${track.id}`, track.pan, -1, 1, 0.01, v => {
+            this.setTrackPan(track.id, v);
+        });
+        
         this.renderTrackInputSelector(track);
+    }
+    
+    buildTrackKnob(id, initialVal, min, max, step, onChange) {
+        const container = document.getElementById(id);
+        if (!container) return;
+        container.innerHTML = '';
+        
+        const range = max - min;
+        const normalized = (initialVal - min) / range;
+        const angle = -135 + (normalized * 270);
+        
+        const label = id.includes('vol') ? 'Vol' : 'Pan';
+        
+        const knob = document.createElement('div');
+        knob.className = 'knob';
+        knob.innerHTML = `
+            <div class="knob-body" style="transform: rotate(${angle}deg)">
+                <div class="knob-indicator"></div>
+            </div>
+            <div class="knob-label">${label}</div>
+        `;
+        
+        let startY, startVal;
+        const knobBody = knob.querySelector('.knob-body');
+        
+        const onStart = (e) => {
+            e.preventDefault(); e.stopPropagation();
+            startY = e.clientY || e.touches?.[0]?.clientY;
+            startVal = initialVal;
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onEnd);
+            document.addEventListener('touchmove', onMove, { passive: false });
+            document.addEventListener('touchend', onEnd);
+        };
+        const onMove = (e) => {
+            e.preventDefault();
+            const y = e.clientY || e.touches?.[0]?.clientY;
+            const delta = (startY - y) * step * 2;
+            let val = startVal + delta;
+            if (val < min) val = min;
+            if (val > max) val = max;
+            val = Math.round(val / step) * step;
+            const n = (val - min) / range;
+            knobBody.style.transform = `rotate(${-135 + n * 270}deg)`;
+            onChange(val);
+        };
+        const onEnd = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onEnd);
+            document.removeEventListener('touchmove', onMove);
+            document.removeEventListener('touchend', onEnd);
+        };
+        
+        knobBody.addEventListener('mousedown', onStart);
+        knobBody.addEventListener('touchstart', onStart, { passive: false });
+        
+        container.appendChild(knob);
     }
     
     renderTrackInputSelector(track) {
@@ -811,17 +918,43 @@ class JustDAW {
     
     updateTrackAudio(track) {
         const hasSolo = this.tracks.some(t => t.soloed);
-        track.gainNode.gain.value = hasSolo ? (track.soloed ? track.volume : 0) : (track.muted ? 0 : track.volume);
+        let val;
+        if (track.muted) {
+            val = 0;
+        } else if (hasSolo) {
+            val = track.soloed ? track.volume : 0;
+        } else {
+            val = track.volume;
+        }
+        track.gainNode.gain.value = val;
         track.panNode.pan.value = track.pan;
     }
     
     toggleMute(id) {
         const t = this.tracks.find(x => x.id === id);
-        if (t) { t.muted = !t.muted; this.updateTrackAudio(t); const b = document.querySelector(`#header-${id} .mute-btn`); if (b) b.classList.toggle('active', t.muted); }
+        if (t) {
+            t.muted = !t.muted;
+            this.updateTrackAudio(t);
+            const btn = document.querySelector(`#header-${id} .mute-btn`);
+            if (btn) {
+                btn.classList.toggle('active', t.muted);
+                btn.style.backgroundColor = t.muted ? '#ff9800' : '';
+                btn.style.color = t.muted ? '#fff' : '';
+            }
+        }
     }
     toggleSolo(id) {
         const t = this.tracks.find(x => x.id === id);
-        if (t) { t.soloed = !t.soloed; this.handleSolo(); const b = document.querySelector(`#header-${id} .solo-btn`); if (b) b.classList.toggle('active', t.soloed); }
+        if (t) {
+            t.soloed = !t.soloed;
+            this.handleSolo();
+            const btn = document.querySelector(`#header-${id} .solo-btn`);
+            if (btn) {
+                btn.classList.toggle('active', t.soloed);
+                btn.style.backgroundColor = t.soloed ? '#2196F3' : '';
+                btn.style.color = t.soloed ? '#fff' : '';
+            }
+        }
     }
     handleSolo() {
         const s = this.tracks.some(t => t.soloed);
@@ -829,7 +962,15 @@ class JustDAW {
     }
     toggleArm(id) {
         const t = this.tracks.find(x => x.id === id);
-        if (t) { t.armed = !t.armed; const b = document.querySelector(`#header-${id} .arm-btn`); if (b) b.classList.toggle('active', t.armed); }
+        if (t) {
+            t.armed = !t.armed;
+            const btn = document.querySelector(`#header-${id} .arm-btn`);
+            if (btn) {
+                btn.classList.toggle('active', t.armed);
+                btn.style.backgroundColor = t.armed ? '#f44336' : '';
+                btn.style.color = t.armed ? '#fff' : '';
+            }
+        }
     }
     setTrackVolume(id, v) { const t = this.tracks.find(x => x.id === id); if (t) { t.volume = parseFloat(v); this.updateTrackAudio(t); } }
     setTrackPan(id, v) { const t = this.tracks.find(x => x.id === id); if (t) { t.pan = parseFloat(v); this.updateTrackAudio(t); } }
@@ -1076,6 +1217,7 @@ class JustDAW {
     
     // ─── File Drop ──────────────────────────────────────────────────────────
     async handleFileDrop(files) {
+        this.initAudio();
         for (const file of files) {
             if (!file.type.startsWith('audio/')) continue;
             try {
@@ -1086,7 +1228,7 @@ class JustDAW {
                 const track = {
                     id: tid, name: file.name.replace(/\.[^/.]+$/, ''), volume: 0.8, pan: 0,
                     muted: false, soloed: false, armed: false,
-                    blocks: [block], sourceNode: null,
+                    blocks: [block], sourceNode: null, activeSources: [],
                     gainNode: this.audioContext.createGain(), panNode: this.audioContext.createStereoPanner(),
                     mediaStream: null, mediaRecorder: null, chunks: [],
                     recordingStartTime: null, inputDeviceId: null,
@@ -1098,18 +1240,19 @@ class JustDAW {
                 this.renderTrackRow(track);
                 this.updateTrackAudio(track);
                 requestAnimationFrame(() => { this.drawTrackWaveforms(track); this.renderAudioBlock(track, block); });
-            } catch(e) { console.error('Error decoding audio:', e); }
+            } catch(e) { console.error('Error decoding audio:', e); alert(`Could not load "${file.name}": ${e.message}`); }
         }
     }
     
     // ─── Meter ──────────────────────────────────────────────────────────────
     startRenderLoop() {
+        if (this._meterAnimationId) cancelAnimationFrame(this._meterAnimationId);
         const mc = this.elements.masterMeter;
         const ctx = mc.getContext('2d');
         const len = this.analyser.frequencyBinCount;
         const arr = new Uint8Array(len);
         const draw = () => {
-            requestAnimationFrame(draw);
+            this._meterAnimationId = requestAnimationFrame(draw);
             this.analyser.getByteTimeDomainData(arr);
             ctx.fillStyle = '#222'; ctx.fillRect(0, 0, mc.width, mc.height);
             ctx.lineWidth = 1; ctx.strokeStyle = '#4CAF50'; ctx.beginPath();
