@@ -22,9 +22,17 @@ class JustDAW {
         this.pixelsPerSecond = 50;
         this.timelineScrollLeft = 0;
         
-        // Tracks
+        // Tracks - now with blocks (clips) instead of single audioBuffer
         this.tracks = [];
         this.nextTrackId = 1;
+        this.nextBlockId = 1;
+        
+        // Mic input sources
+        this.audioInputDevices = [];
+        this.selectedInputDeviceId = null;
+        
+        // Drag state
+        this.isDraggingPlayhead = false;
         
         // UI Elements
         this.elements = {
@@ -55,15 +63,13 @@ class JustDAW {
         this.renderRuler();
         this.checkMicPermission();
         this.setupResizeHandler();
+        this.setupPlayheadDrag();
     }
     
     setupResizeHandler() {
-        // Handle canvas resizing
         const resizeObserver = new ResizeObserver(() => {
             this.tracks.forEach(track => {
-                if (track.audioBuffer) {
-                    this.drawWaveform(track);
-                }
+                this.drawTrackWaveforms(track);
             });
             this.renderRuler();
         });
@@ -71,14 +77,12 @@ class JustDAW {
     }
     
     async checkMicPermission() {
-        // Check if getUserMedia is available
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             console.warn('getUserMedia not supported in this browser');
             this.showMicNotSupported();
             return;
         }
 
-        // Try to use permissions API if available
         if (navigator.permissions && navigator.permissions.query) {
             try {
                 const result = await navigator.permissions.query({ name: 'microphone' });
@@ -86,21 +90,18 @@ class JustDAW {
                 result.onchange = () => this.updateMicPermissionUI(result.state);
                 return;
             } catch (e) {
-                // permissions API not supported for microphone, fall through
                 console.log('Permissions API not available for microphone');
             }
         }
         
-        // Fallback: Check if we already have permission by trying to get a stream
-        // This is less intrusive - we just check and immediately stop
+        // Fallback: try to get a stream to check permission
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            // If we get here, permission was already granted
             stream.getTracks().forEach(t => t.stop());
             this.micPermissionGranted = true;
             this.hideMicPermissionButton();
+            await this.enumerateAudioInputs();
         } catch (err) {
-            // Permission not granted or denied - show the enable button
             if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
                 this.showPermissionDeniedModal();
             } else {
@@ -109,14 +110,63 @@ class JustDAW {
         }
     }
     
+    async enumerateAudioInputs() {
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            this.audioInputDevices = devices.filter(d => d.kind === 'audioinput');
+            this.populateInputSelector();
+        } catch (e) {
+            console.error('Could not enumerate devices:', e);
+        }
+    }
+    
+    populateInputSelector() {
+        // Remove existing selector if any
+        const existing = document.getElementById('mic-input-selector');
+        if (existing) existing.remove();
+        
+        if (this.audioInputDevices.length <= 1) return; // No need for selector with 0 or 1 device
+        
+        const container = document.createElement('div');
+        container.id = 'mic-input-selector';
+        container.className = 'mic-input-selector';
+        
+        const label = document.createElement('label');
+        label.textContent = 'Input: ';
+        label.htmlFor = 'mic-input-select';
+        
+        const select = document.createElement('select');
+        select.id = 'mic-input-select';
+        
+        this.audioInputDevices.forEach((device, idx) => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.textContent = device.label || `Microphone ${idx + 1}`;
+            select.appendChild(option);
+        });
+        
+        select.addEventListener('change', (e) => {
+            this.selectedInputDeviceId = e.target.value;
+        });
+        
+        // Set default
+        this.selectedInputDeviceId = this.audioInputDevices[0].deviceId;
+        
+        container.appendChild(label);
+        container.appendChild(select);
+        
+        // Insert before record button
+        this.elements.recordBtn.parentNode.insertBefore(container, this.elements.recordBtn);
+    }
+    
     updateMicPermissionUI(state) {
         if (state === 'granted') {
             this.micPermissionGranted = true;
             this.hideMicPermissionButton();
+            this.enumerateAudioInputs();
         } else if (state === 'prompt') {
             this.showMicPermissionButton();
         } else {
-            // denied
             this.showPermissionDeniedModal();
         }
     }
@@ -130,7 +180,6 @@ class JustDAW {
         btn.textContent = '🎤 Enable Microphone';
         btn.onclick = () => this.requestMicPermission();
         
-        // Add to transport bar
         this.elements.recordBtn.parentNode.insertBefore(btn, this.elements.recordBtn);
     }
     
@@ -158,6 +207,7 @@ class JustDAW {
             stream.getTracks().forEach(t => t.stop());
             this.hideMicPermissionButton();
             this.micPermissionGranted = true;
+            await this.enumerateAudioInputs();
         } catch (err) {
             console.error('Mic permission denied:', err);
             if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
@@ -169,7 +219,6 @@ class JustDAW {
     }
     
     showPermissionDeniedModal() {
-        // Remove existing modal if any
         const existing = document.getElementById('permission-modal');
         if (existing) existing.remove();
         
@@ -194,6 +243,7 @@ class JustDAW {
                 modal.remove();
                 this.hideMicPermissionButton();
                 this.micPermissionGranted = true;
+                await this.enumerateAudioInputs();
             } catch (err) {
                 alert('Permission denied. Please check your browser settings and try again.');
             }
@@ -276,6 +326,69 @@ class JustDAW {
         });
     }
     
+    setupPlayheadDrag() {
+        const ruler = this.elements.timelineRuler;
+        const grid = this.elements.timelineGrid;
+        
+        // Handle mouse down on ruler or grid to start dragging playhead
+        const onMouseDown = (e) => {
+            // Only start drag if clicking on the ruler area or the grid area (not on blocks)
+            const target = e.target;
+            if (target.closest('.audio-block')) return;
+            
+            this.isDraggingPlayhead = true;
+            this.setPlayheadFromMouse(e);
+            document.body.style.cursor = 'col-resize';
+        };
+        
+        const onMouseMove = (e) => {
+            if (!this.isDraggingPlayhead) return;
+            this.setPlayheadFromMouse(e);
+        };
+        
+        const onMouseUp = () => {
+            if (this.isDraggingPlayhead) {
+                this.isDraggingPlayhead = false;
+                document.body.style.cursor = '';
+            }
+        };
+        
+        ruler.addEventListener('mousedown', onMouseDown);
+        grid.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    }
+    
+    setPlayheadFromMouse(e) {
+        // Determine which element was clicked to calculate correct offset
+        const target = e.currentTarget || e.target;
+        const rect = target.closest('.timeline-area').querySelector('.timeline-grid').getBoundingClientRect();
+        const scrollLeft = this.elements.timelineGrid.scrollLeft;
+        const x = e.clientX - rect.left + scrollLeft;
+        const time = Math.max(0, x / this.pixelsPerSecond);
+        
+        const wasPlaying = this.isPlaying;
+        if (wasPlaying) {
+            // Stop current playback
+            this.tracks.forEach(track => {
+                if (track.sourceNode) {
+                    try { track.sourceNode.stop(); } catch (e) {}
+                    track.sourceNode = null;
+                }
+            });
+        }
+        
+        this.currentTime = time;
+        this.playStartTime = this.audioContext.currentTime - this.currentTime;
+        this.elements.timeDisplay.textContent = this.formatTime(this.currentTime);
+        this.updatePlayheadPosition();
+        
+        if (wasPlaying) {
+            // Restart playback from new position
+            this.playFromCurrentTime();
+        }
+    }
+    
     addTrack() {
         const trackId = this.nextTrackId++;
         const track = {
@@ -286,13 +399,15 @@ class JustDAW {
             muted: false,
             soloed: false,
             armed: false,
-            audioBuffer: null,
+            blocks: [], // Array of audio blocks instead of single audioBuffer
             sourceNode: null,
             gainNode: this.audioContext.createGain(),
             panNode: this.audioContext.createStereoPanner(),
             mediaStream: null,
             mediaRecorder: null,
-            chunks: []
+            chunks: [],
+            recordingStartTime: null,
+            recordingBlockId: null
         };
         
         // Connect audio graph: gain -> pan -> master
@@ -421,12 +536,10 @@ class JustDAW {
         const row = document.getElementById(`row-${track.id}`);
         if (!row) return;
         
-        // Set canvas size to match row
         const rect = row.getBoundingClientRect();
         canvas.width = rect.width;
         canvas.height = rect.height;
         
-        // Draw empty waveform background
         this.drawEmptyWaveform(track);
     }
     
@@ -453,13 +566,11 @@ class JustDAW {
         const width = Math.max(ruler.offsetWidth, this.elements.timelineGrid.scrollWidth);
         const totalSeconds = Math.max(width / this.pixelsPerSecond, 120);
         
-        // Create ruler content container
         const content = document.createElement('div');
         content.style.position = 'relative';
         content.style.width = `${totalSeconds * this.pixelsPerSecond}px`;
         content.style.height = '100%';
         
-        // Draw beat marks
         const beatsPerSecond = this.bpm / 60;
         const pixelsPerBeat = this.pixelsPerSecond / beatsPerSecond;
         const totalBeats = Math.ceil(totalSeconds * beatsPerSecond);
@@ -478,7 +589,6 @@ class JustDAW {
             
             content.appendChild(mark);
             
-            // Add measure numbers
             if (isMeasure) {
                 const measureNum = Math.floor(beat / 4) + 1;
                 const label = document.createElement('span');
@@ -565,7 +675,7 @@ class JustDAW {
     
     setBPM(value) {
         this.bpm = parseInt(value);
-        this.renderRuler(); // Re-render ruler with new BPM
+        this.renderRuler();
     }
     
     setMasterVolume(value) {
@@ -590,42 +700,34 @@ class JustDAW {
         this.elements.playBtn.classList.add('active');
         this.elements.playBtn.textContent = '⏸';
         
-        // Calculate the offset into the audio buffer
-        const offset = this.currentTime;
-        
-        // Start sources for all tracks with audio
-        this.tracks.forEach(track => {
-            if (track.audioBuffer) {
-                // Stop existing source if any
-                if (track.sourceNode) {
-                    try { track.sourceNode.stop(); } catch (e) {}
-                }
-                
-                const sourceNode = this.audioContext.createBufferSource();
-                sourceNode.buffer = track.audioBuffer;
-                sourceNode.connect(track.gainNode);
-                
-                // Handle loop if enabled
-                if (this.isLooping) {
-                    sourceNode.loop = true;
-                    sourceNode.loopStart = this.loopStart;
-                    sourceNode.loopEnd = this.loopEnd;
-                }
-                
-                // Start from current position if within buffer duration
-                const duration = track.audioBuffer.duration;
-                if (offset < duration) {
-                    sourceNode.start(0, offset);
-                } else {
-                    // If we're past the end, start from beginning or don't play
-                    sourceNode.start(0, 0);
-                }
-                track.sourceNode = sourceNode;
-            }
-        });
-        
         this.playStartTime = this.audioContext.currentTime - this.currentTime;
+        this.playFromCurrentTime();
         this.updatePlayhead();
+    }
+    
+    playFromCurrentTime() {
+        // Start sources for all tracks with blocks that overlap currentTime
+        this.tracks.forEach(track => {
+            if (track.sourceNode) {
+                try { track.sourceNode.stop(); } catch (e) {}
+                track.sourceNode = null;
+            }
+            
+            // Find blocks that should be playing at currentTime
+            track.blocks.forEach(block => {
+                if (this.currentTime >= block.startTime && this.currentTime < block.endTime) {
+                    const sourceNode = this.audioContext.createBufferSource();
+                    sourceNode.buffer = block.audioBuffer;
+                    sourceNode.connect(track.gainNode);
+                    
+                    const offsetInBlock = this.currentTime - block.startTime;
+                    const remainingDuration = block.endTime - this.currentTime;
+                    
+                    sourceNode.start(0, offsetInBlock, remainingDuration);
+                    track.sourceNode = sourceNode;
+                }
+            });
+        });
     }
     
     pause() {
@@ -698,12 +800,12 @@ class JustDAW {
                 // permissions API not supported, try requesting directly
             }
             
-            // Try to get permission
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 stream.getTracks().forEach(t => t.stop());
                 this.micPermissionGranted = true;
                 this.hideMicPermissionButton();
+                await this.enumerateAudioInputs();
             } catch (err) {
                 this.showPermissionDeniedModal();
                 return;
@@ -720,19 +822,23 @@ class JustDAW {
         this.isRecording = true;
         this.elements.recordBtn.classList.add('active');
         
+        // Record start time for block positioning
+        const recordStartTime = this.isPlaying ? this.currentTime : 0;
+        
         // Start recording on armed tracks
         for (const track of armedTracks) {
-            await this.startTrackRecording(track);
+            await this.startTrackRecording(track, recordStartTime);
         }
         
         // Auto-play during recording if not already playing
         if (!this.isPlaying) {
-            this.playStartTime = this.audioContext.currentTime - this.currentTime;
+            this.playStartTime = this.audioContext.currentTime;
+            this.currentTime = 0;
             this.updatePlayhead();
         }
     }
     
-    async startTrackRecording(track) {
+    async startTrackRecording(track, recordStartTime) {
         try {
             const constraints = {
                 audio: {
@@ -741,6 +847,12 @@ class JustDAW {
                     autoGainControl: false
                 }
             };
+            
+            // Use selected input device if available
+            if (this.selectedInputDeviceId) {
+                constraints.audio.deviceId = { exact: this.selectedInputDeviceId };
+            }
+            
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
             track.mediaStream = stream;
             
@@ -754,6 +866,7 @@ class JustDAW {
             
             track.mediaRecorder = new MediaRecorder(stream, { mimeType });
             track.chunks = [];
+            track.recordingStartTime = recordStartTime;
             
             track.mediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0) track.chunks.push(e.data);
@@ -764,14 +877,27 @@ class JustDAW {
                     const blob = new Blob(track.chunks, { type: mimeType });
                     const arrayBuffer = await blob.arrayBuffer();
                     try {
-                        track.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-                        this.drawWaveform(track);
+                        const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+                        
+                        // Create a new audio block
+                        const block = {
+                            id: this.nextBlockId++,
+                            audioBuffer: audioBuffer,
+                            startTime: track.recordingStartTime,
+                            endTime: track.recordingStartTime + audioBuffer.duration,
+                            duration: audioBuffer.duration
+                        };
+                        
+                        track.blocks.push(block);
+                        this.drawTrackWaveforms(track);
+                        this.renderAudioBlock(track, block);
                     } catch (err) {
                         console.error('Decode error:', err);
                     }
                 }
                 stream.getTracks().forEach(t => t.stop());
                 track.mediaStream = null;
+                track.recordingStartTime = null;
             };
             
             track.mediaRecorder.start();
@@ -790,7 +916,6 @@ class JustDAW {
             }
         });
         
-        // Don't stop the playhead update - let it continue if playing
         if (!this.isPlaying && this.animationFrameId) {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
@@ -818,16 +943,19 @@ class JustDAW {
                     try { track.sourceNode.stop(); } catch (e) {}
                     track.sourceNode = null;
                 }
-                if (track.audioBuffer) {
-                    const sourceNode = this.audioContext.createBufferSource();
-                    sourceNode.buffer = track.audioBuffer;
-                    sourceNode.connect(track.gainNode);
-                    sourceNode.loop = true;
-                    sourceNode.loopStart = this.loopStart;
-                    sourceNode.loopEnd = this.loopEnd;
-                    sourceNode.start(0, this.loopStart);
-                    track.sourceNode = sourceNode;
-                }
+                // Find and play blocks at loop start
+                track.blocks.forEach(block => {
+                    if (this.currentTime >= block.startTime && this.currentTime < block.endTime) {
+                        const sourceNode = this.audioContext.createBufferSource();
+                        sourceNode.buffer = block.audioBuffer;
+                        sourceNode.connect(track.gainNode);
+                        sourceNode.loop = true;
+                        sourceNode.loopStart = this.loopStart;
+                        sourceNode.loopEnd = this.loopEnd;
+                        sourceNode.start(0, this.loopStart);
+                        track.sourceNode = sourceNode;
+                    }
+                });
             });
         }
         
@@ -849,9 +977,60 @@ class JustDAW {
         this.elements.timelineGrid.appendChild(playhead);
     }
     
-    drawWaveform(track) {
+    renderAudioBlock(track, block) {
+        const row = document.getElementById(`row-${track.id}`);
+        if (!row) return;
+        
+        // Remove existing block element if any (for same block id)
+        const existingBlock = document.getElementById(`block-${block.id}`);
+        if (existingBlock) existingBlock.remove();
+        
+        const blockEl = document.createElement('div');
+        blockEl.className = 'audio-block';
+        blockEl.id = `block-${block.id}`;
+        blockEl.style.left = `${block.startTime * this.pixelsPerSecond}px`;
+        blockEl.style.width = `${block.duration * this.pixelsPerSecond}px`;
+        
+        // Block label
+        const label = document.createElement('span');
+        label.className = 'audio-block-label';
+        label.textContent = `Recording ${block.id}`;
+        blockEl.appendChild(label);
+        
+        // Delete button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'audio-block-delete';
+        deleteBtn.textContent = '✕';
+        deleteBtn.title = 'Delete block';
+        deleteBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.deleteBlock(track.id, block.id);
+        };
+        blockEl.appendChild(deleteBtn);
+        
+        row.appendChild(blockEl);
+    }
+    
+    deleteBlock(trackId, blockId) {
+        const track = this.tracks.find(t => t.id === trackId);
+        if (!track) return;
+        
+        const blockIndex = track.blocks.findIndex(b => b.id === blockId);
+        if (blockIndex > -1) {
+            track.blocks.splice(blockIndex, 1);
+            
+            // Remove block element
+            const blockEl = document.getElementById(`block-${blockId}`);
+            if (blockEl) blockEl.remove();
+            
+            // Redraw waveforms
+            this.drawTrackWaveforms(track);
+        }
+    }
+    
+    drawTrackWaveforms(track) {
         const canvas = document.getElementById(`canvas-${track.id}`);
-        if (!canvas || !track.audioBuffer) return;
+        if (!canvas) return;
         
         // Ensure canvas is properly sized
         const row = document.getElementById(`row-${track.id}`);
@@ -866,39 +1045,56 @@ class JustDAW {
         }
         
         const ctx = canvas.getContext('2d');
-        const data = track.audioBuffer.getChannelData(0);
-        const step = Math.ceil(data.length / canvas.width);
-        const amp = canvas.height / 2;
         
-        // Clear canvas
+        // Clear canvas completely
         ctx.fillStyle = '#1e1e1e';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
         // Draw center line
         ctx.strokeStyle = '#333';
         ctx.beginPath();
-        ctx.moveTo(0, amp);
-        ctx.lineTo(canvas.width, amp);
+        ctx.moveTo(0, canvas.height / 2);
+        ctx.lineTo(canvas.width, canvas.height / 2);
         ctx.stroke();
         
-        // Draw waveform
+        // Draw waveforms for each block
+        track.blocks.forEach(block => {
+            this.drawBlockWaveform(ctx, canvas, block);
+        });
+    }
+    
+    drawBlockWaveform(ctx, canvas, block) {
+        if (!block.audioBuffer) return;
+        
+        const data = block.audioBuffer.getChannelData(0);
+        const amp = canvas.height / 2;
+        
+        // Calculate pixel positions for this block
+        const startPixel = block.startTime * this.pixelsPerSecond;
+        const blockPixelWidth = block.duration * this.pixelsPerSecond;
+        
+        const step = Math.ceil(data.length / blockPixelWidth);
+        
         ctx.beginPath();
         ctx.strokeStyle = '#4CAF50';
         ctx.lineWidth = 1;
         
-        for (let i = 0; i < canvas.width; i++) {
+        for (let i = 0; i < blockPixelWidth; i++) {
+            const x = startPixel + i;
+            if (x < 0 || x >= canvas.width) continue;
+            
             let min = 1.0;
             let max = -1.0;
             for (let j = 0; j < step; j++) {
-                const idx = (i * step) + j;
+                const idx = Math.floor(i * step) + j;
                 if (idx < data.length) {
                     const datum = data[idx];
                     if (datum < min) min = datum;
                     if (datum > max) max = datum;
                 }
             }
-            ctx.lineTo(i, (1 + min) * amp);
-            ctx.lineTo(i, (1 + max) * amp);
+            ctx.lineTo(x, (1 + min) * amp);
+            ctx.lineTo(x, (1 + max) * amp);
         }
         ctx.stroke();
     }
@@ -910,6 +1106,16 @@ class JustDAW {
                 try {
                     const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
                     const trackId = this.nextTrackId++;
+                    
+                    // Create a block for the dropped file
+                    const block = {
+                        id: this.nextBlockId++,
+                        audioBuffer: audioBuffer,
+                        startTime: 0,
+                        endTime: audioBuffer.duration,
+                        duration: audioBuffer.duration
+                    };
+                    
                     const track = {
                         id: trackId,
                         name: file.name.replace(/\.[^/.]+$/, ''),
@@ -918,13 +1124,14 @@ class JustDAW {
                         muted: false,
                         soloed: false,
                         armed: false,
-                        audioBuffer: audioBuffer,
+                        blocks: [block],
                         sourceNode: null,
                         gainNode: this.audioContext.createGain(),
                         panNode: this.audioContext.createStereoPanner(),
                         mediaStream: null,
                         mediaRecorder: null,
-                        chunks: []
+                        chunks: [],
+                        recordingStartTime: null
                     };
                     
                     track.gainNode.connect(track.panNode);
@@ -935,8 +1142,11 @@ class JustDAW {
                     this.renderTrackRow(track);
                     this.updateTrackAudio(track);
                     
-                    // Draw waveform after canvas is set up
-                    requestAnimationFrame(() => this.drawWaveform(track));
+                    // Draw waveform and block after canvas is set up
+                    requestAnimationFrame(() => {
+                        this.drawTrackWaveforms(track);
+                        this.renderAudioBlock(track, block);
+                    });
                 } catch (err) {
                     console.error('Error decoding audio:', err);
                 }
@@ -997,12 +1207,10 @@ if ('serviceWorker' in navigator) {
             .then((registration) => {
                 console.log('Just-DAW: Service Worker registered with scope:', registration.scope);
                 
-                // Check for updates
                 registration.addEventListener('updatefound', () => {
                     const newWorker = registration.installing;
                     newWorker.addEventListener('statechange', () => {
                         if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                            // New version available
                             console.log('Just-DAW: New version available!');
                         }
                     });
