@@ -1,13 +1,9 @@
 // Just-DAW Audio Engine & UI Controller
-
 class JustDAW {
     constructor() {
-        // Audio Context
         this.audioContext = null;
         this.masterGain = null;
         this.analyser = null;
-        
-        // Transport State
         this.isPlaying = false;
         this.isRecording = false;
         this.isLooping = false;
@@ -17,27 +13,24 @@ class JustDAW {
         this.bpm = 120;
         this.playStartTime = 0;
         this.animationFrameId = null;
-        
-        // Zoom/Pan
         this.pixelsPerSecond = 50;
         this.timelineScrollLeft = 0;
-        
-        // Tracks
         this.tracks = [];
         this.nextTrackId = 1;
         this.nextBlockId = 1;
         this.selectedTrackId = null;
-        
-        // Mic input sources
+        this.selectedBlockId = null;
         this.audioInputDevices = [];
-        
-        // Drag state
         this.isDraggingPlayhead = false;
+        this.activePanel = null;
+        this._lyricsText = '';
         
-        // Bottom panel state
-        this.activePanel = null; // 'effects' | 'editor' | 'lyrics' | 'shortcuts' | null
+        // Block drag state
+        this.dragState = null; // { blockId, trackId, startX, startStartTime }
         
-        // UI Elements
+        // Clipboard for copy/paste
+        this.clipboard = null; // { audioBuffer }
+        
         this.elements = {
             playBtn: document.getElementById('play-btn'),
             stopBtn: document.getElementById('stop-btn'),
@@ -73,189 +66,10 @@ class JustDAW {
         this.setupResizeHandler();
         this.setupPlayheadDrag();
         this.setupToolTray();
+        this.setupTimelineClicks();
     }
     
-    setupResizeHandler() {
-        const resizeObserver = new ResizeObserver(() => {
-            this.tracks.forEach(track => {
-                this.drawTrackWaveforms(track);
-            });
-            this.renderRuler();
-        });
-        resizeObserver.observe(this.elements.timelineGrid);
-    }
-    
-    async checkMicPermission() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            console.warn('getUserMedia not supported in this browser');
-            this.showMicNotSupported();
-            return;
-        }
-
-        if (navigator.permissions && navigator.permissions.query) {
-            try {
-                const result = await navigator.permissions.query({ name: 'microphone' });
-                this.updateMicPermissionUI(result.state);
-                result.onchange = () => this.updateMicPermissionUI(result.state);
-                return;
-            } catch (e) {
-                console.log('Permissions API not available for microphone');
-            }
-        }
-        
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            stream.getTracks().forEach(t => t.stop());
-            this.micPermissionGranted = true;
-            this.hideMicPermissionButton();
-            await this.enumerateAudioInputs();
-        } catch (err) {
-            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-                this.showPermissionDeniedModal();
-            } else {
-                this.showMicPermissionButton();
-            }
-        }
-    }
-    
-    async enumerateAudioInputs() {
-        try {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            this.audioInputDevices = devices.filter(d => d.kind === 'audioinput');
-            this.refreshAllTrackInputSelectors();
-        } catch (e) {
-            console.error('Could not enumerate devices:', e);
-        }
-    }
-    
-    refreshAllTrackInputSelectors() {
-        this.tracks.forEach(track => {
-            this.renderTrackInputSelector(track);
-        });
-    }
-    
-    renderTrackInputSelector(track) {
-        const header = document.getElementById(`header-${track.id}`);
-        if (!header) return;
-        
-        const select = header.querySelector(`#input-select-${track.id}`);
-        
-        if (select) {
-            // Just update existing select options
-            const currentValue = select.value;
-            
-            // Clear all except default
-            while (select.options.length > 1) {
-                select.remove(1);
-            }
-            
-            this.audioInputDevices.forEach((device, idx) => {
-                const option = document.createElement('option');
-                option.value = device.deviceId;
-                option.textContent = device.label || `Mic ${idx + 1}`;
-                select.appendChild(option);
-            });
-            
-            select.value = currentValue;
-        }
-        // The select is already in the HTML template, so we just populate it
-    }
-    
-    updateMicPermissionUI(state) {
-        if (state === 'granted') {
-            this.micPermissionGranted = true;
-            this.hideMicPermissionButton();
-            this.enumerateAudioInputs();
-        } else if (state === 'prompt') {
-            this.showMicPermissionButton();
-        } else {
-            this.showPermissionDeniedModal();
-        }
-    }
-    
-    showMicPermissionButton() {
-        if (document.getElementById('mic-permission-btn')) return;
-        
-        const btn = document.createElement('button');
-        btn.id = 'mic-permission-btn';
-        btn.className = 'mic-permission-btn';
-        btn.textContent = '🎤 Enable Microphone';
-        btn.onclick = () => this.requestMicPermission();
-        
-        this.elements.recordBtn.parentNode.insertBefore(btn, this.elements.recordBtn);
-    }
-    
-    hideMicPermissionButton() {
-        const btn = document.getElementById('mic-permission-btn');
-        if (btn) btn.remove();
-    }
-    
-    showMicNotSupported() {
-        const existing = document.getElementById('mic-not-supported-msg');
-        if (existing) return;
-        
-        const msg = document.createElement('span');
-        msg.id = 'mic-not-supported-msg';
-        msg.style.color = '#ff9800';
-        msg.style.fontSize = '12px';
-        msg.textContent = '🎤 Mic not supported';
-        
-        this.elements.recordBtn.parentNode.insertBefore(msg, this.elements.recordBtn);
-    }
-    
-    async requestMicPermission() {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            stream.getTracks().forEach(t => t.stop());
-            this.hideMicPermissionButton();
-            this.micPermissionGranted = true;
-            await this.enumerateAudioInputs();
-        } catch (err) {
-            console.error('Mic permission denied:', err);
-            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-                this.showPermissionDeniedModal();
-            } else {
-                alert('Could not access microphone: ' + err.message);
-            }
-        }
-    }
-    
-    showPermissionDeniedModal() {
-        const existing = document.getElementById('permission-modal');
-        if (existing) existing.remove();
-        
-        const modal = document.createElement('div');
-        modal.id = 'permission-modal';
-        modal.className = 'permission-modal';
-        modal.innerHTML = `
-            <div class="permission-modal-content">
-                <h3>Microphone Access Required</h3>
-                <p>To record audio, Just-DAW needs access to your microphone.</p>
-                <p>Please click the button below and allow access in your browser's prompt.</p>
-                <button id="permission-retry-btn" class="permission-retry-btn">Allow Microphone Access</button>
-                <button id="permission-close-btn" class="permission-close-btn">Close</button>
-            </div>
-        `;
-        document.body.appendChild(modal);
-        
-        document.getElementById('permission-retry-btn').onclick = async () => {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach(t => t.stop());
-                modal.remove();
-                this.hideMicPermissionButton();
-                this.micPermissionGranted = true;
-                await this.enumerateAudioInputs();
-            } catch (err) {
-                alert('Permission denied. Please check your browser settings and try again.');
-            }
-        };
-        
-        document.getElementById('permission-close-btn').onclick = () => {
-            modal.remove();
-        };
-    }
-    
+    // ─── Audio ────────────────────────────────────────────────────────────────
     initAudio() {
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -266,289 +80,82 @@ class JustDAW {
             this.masterGain.connect(this.analyser);
             this.analyser.connect(this.audioContext.destination);
         }
-        if (this.audioContext.state === 'suspended') {
-            this.audioContext.resume();
+        if (this.audioContext.state === 'suspended') this.audioContext.resume();
+    }
+    
+    // ─── Track Selection ─────────────────────────────────────────────────────
+    selectTrack(trackId) {
+        if (this.selectedTrackId) {
+            const prev = document.getElementById(`header-${this.selectedTrackId}`);
+            if (prev) prev.classList.remove('selected');
+            const prevRow = document.getElementById(`row-${this.selectedTrackId}`);
+            if (prevRow) prevRow.classList.remove('selected');
+        }
+        this.selectedTrackId = trackId;
+        if (trackId) {
+            const h = document.getElementById(`header-${trackId}`);
+            if (h) h.classList.add('selected');
+            const r = document.getElementById(`row-${trackId}`);
+            if (r) r.classList.add('selected');
+        }
+        if (this.activePanel === 'effects') this.openBottomPanel('effects');
+    }
+    
+    selectBlock(blockId) {
+        // Deselect previous
+        if (this.selectedBlockId) {
+            const prev = document.getElementById(`block-${this.selectedBlockId}`);
+            if (prev) prev.classList.remove('selected');
+        }
+        this.selectedBlockId = blockId;
+        if (blockId) {
+            const el = document.getElementById(`block-${blockId}`);
+            if (el) el.classList.add('selected');
         }
     }
     
-    setupEventListeners() {
-        this.elements.playBtn.addEventListener('click', () => this.togglePlayback());
-        this.elements.stopBtn.addEventListener('click', () => this.stop());
-        this.elements.recordBtn.addEventListener('click', () => this.toggleRecording());
-        this.elements.loopBtn.addEventListener('click', () => this.toggleLoop());
-        this.elements.addTrackBtn.addEventListener('click', () => this.addTrack());
-        this.elements.bpmInput.addEventListener('change', (e) => this.setBPM(e.target.value));
-        this.elements.masterVol.addEventListener('input', (e) => this.setMasterVolume(e.target.value));
-        
-        // Bottom panel close
-        if (this.elements.bottomPanelClose) {
-            this.elements.bottomPanelClose.addEventListener('click', () => this.closeBottomPanel());
-        }
-        
-        // Timeline scroll sync with ruler
-        this.elements.timelineGrid.addEventListener('scroll', (e) => {
-            this.timelineScrollLeft = e.target.scrollLeft;
-            this.elements.timelineRuler.scrollLeft = e.target.scrollLeft;
-        });
-        
-        // Drag and drop
-        const dropZone = this.elements.dropZone;
-        const timelineArea = this.elements.timelineArea;
-        
-        timelineArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropZone.classList.add('active');
-        });
-        
-        timelineArea.addEventListener('dragleave', (e) => {
-            if (!timelineArea.contains(e.relatedTarget)) {
-                dropZone.classList.remove('active');
+    // ─── Timeline Click Handling ─────────────────────────────────────────────
+    setupTimelineClicks() {
+        // Click on track row background → select track
+        this.elements.timelineGrid.addEventListener('click', (e) => {
+            const trackRow = e.target.closest('.track-row');
+            if (!trackRow) return;
+            const trackId = parseInt(trackRow.id.replace('row-', ''));
+            
+            // If clicking on a block, handle block selection
+            const blockEl = e.target.closest('.audio-block');
+            if (blockEl) {
+                e.stopPropagation();
+                this.selectTrack(trackId);
+                this.selectBlock(parseInt(blockEl.id.replace('block-', '')));
+                return;
             }
+            
+            // Click on empty area of track row
+            this.selectTrack(trackId);
+            this.selectBlock(null);
         });
-        
-        timelineArea.addEventListener('drop', (e) => {
+    }
+    
+    // ─── Block Dragging ──────────────────────────────────────────────────────
+    setupBlockDrag(blockEl, trackId, block) {
+        blockEl.addEventListener('mousedown', (e) => {
+            if (e.target.classList.contains('audio-block-delete')) return;
             e.preventDefault();
-            dropZone.classList.remove('active');
-            this.handleFileDrop(e.dataTransfer.files);
-        });
-        
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            e.stopPropagation();
             
-            switch(e.code) {
-                case 'Space':
-                    e.preventDefault();
-                    this.togglePlayback();
-                    break;
-                case 'KeyR':
-                    if (!e.ctrlKey && !e.metaKey) {
-                        this.toggleRecording();
-                    }
-                    break;
-                case 'KeyL':
-                    this.toggleLoop();
-                    break;
-                case 'Escape':
-                    this.closeBottomPanel();
-                    break;
-            }
-        });
-    }
-    
-    setupToolTray() {
-        const buttons = this.elements.toolTray.querySelectorAll('.tool-btn');
-        const panelMap = {
-            'Fx Effects': 'effects',
-            'Editor': 'editor',
-            'Lyrics/Notes': 'lyrics',
-            'Shortcuts': 'shortcuts'
-        };
-        
-        buttons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                const panel = panelMap[btn.textContent.trim()];
-                if (panel) {
-                    if (this.activePanel === panel) {
-                        this.closeBottomPanel();
-                    } else {
-                        this.openBottomPanel(panel);
-                    }
-                }
-            });
-        });
-    }
-    
-    openBottomPanel(panel) {
-        this.activePanel = panel;
-        const content = this.elements.bottomPanelContent;
-        content.innerHTML = '';
-        
-        // Update active button state
-        const buttons = this.elements.toolTray.querySelectorAll('.tool-btn');
-        buttons.forEach(btn => {
-            btn.classList.toggle('active', btn.textContent.trim().toLowerCase().includes(panel) ||
-                (panel === 'effects' && btn.textContent.trim() === 'Fx Effects'));
-        });
-        
-        switch(panel) {
-            case 'effects':
-                this.elements.bottomPanelTitle.textContent = 'Effects';
-                this.renderEffectsPanel(content);
-                break;
-            case 'editor':
-                this.elements.bottomPanelTitle.textContent = 'Editor';
-                this.renderEditorPanel(content);
-                break;
-            case 'lyrics':
-                this.elements.bottomPanelTitle.textContent = 'Lyrics/Notes';
-                this.renderLyricsPanel(content);
-                break;
-            case 'shortcuts':
-                this.elements.bottomPanelTitle.textContent = 'Shortcuts';
-                this.renderShortcutsPanel(content);
-                break;
-        }
-        
-        this.elements.bottomPanel.classList.add('open');
-    }
-    
-    closeBottomPanel() {
-        this.activePanel = null;
-        this.elements.bottomPanel.classList.remove('open');
-        const buttons = this.elements.toolTray.querySelectorAll('.tool-btn');
-        buttons.forEach(btn => btn.classList.remove('active'));
-    }
-    
-    renderEffectsPanel(container) {
-        const track = this.tracks.find(t => t.id === this.selectedTrackId);
-        
-        if (!track) {
-            container.innerHTML = '<div class="panel-empty">Select a track to manage its effects. Click on a track header to select it.</div>';
-            return;
-        }
-        
-        const wrapper = document.createElement('div');
-        wrapper.className = 'effects-panel';
-        
-        // Track info
-        const trackInfo = document.createElement('div');
-        trackInfo.className = 'effects-track-info';
-        trackInfo.textContent = `Track: ${track.name}`;
-        wrapper.appendChild(trackInfo);
-        
-        // Add effect button
-        const addRow = document.createElement('div');
-        addRow.className = 'effects-add-row';
-        
-        const select = document.createElement('select');
-        select.className = 'effects-type-select';
-        EffectFactory.getAvailableTypes().forEach(type => {
-            const opt = document.createElement('option');
-            opt.value = type;
-            opt.textContent = EffectFactory.getDisplayName(type);
-            select.appendChild(opt);
-        });
-        addRow.appendChild(select);
-        
-        const addBtn = document.createElement('button');
-        addBtn.className = 'effects-add-btn';
-        addBtn.textContent = '+ Add Effect';
-        addBtn.onclick = () => {
-            this.addEffectToTrack(track.id, select.value);
-            this.renderEffectsPanel(container);
-        };
-        addRow.appendChild(addBtn);
-        wrapper.appendChild(addRow);
-        
-        // Effects list
-        if (track.effects.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'panel-empty';
-            empty.textContent = 'No effects added. Select an effect type above and click "+ Add Effect".';
-            wrapper.appendChild(empty);
-        } else {
-            const list = document.createElement('div');
-            list.className = 'effects-list';
+            this.selectTrack(trackId);
+            this.selectBlock(block.id);
             
-            track.effects.forEach((effect, index) => {
-                const slot = document.createElement('div');
-                slot.className = `effect-slot ${effect.enabled ? 'active' : 'bypassed'}`;
-                
-                // Top row: name, toggle, reorder, remove
-                const topRow = document.createElement('div');
-                topRow.className = 'effect-slot-top';
-                
-                const nameSpan = document.createElement('span');
-                nameSpan.className = 'effect-slot-name';
-                nameSpan.textContent = EffectFactory.getDisplayName(effect.type);
-                topRow.appendChild(nameSpan);
-                
-                const toggleBtn = document.createElement('button');
-                toggleBtn.className = 'effect-toggle-btn';
-                toggleBtn.textContent = effect.enabled ? 'ON' : 'OFF';
-                toggleBtn.onclick = () => {
-                    this.toggleEffect(track.id, effect.id);
-                    this.renderEffectsPanel(container);
-                };
-                topRow.appendChild(toggleBtn);
-                
-                const upBtn = document.createElement('button');
-                upBtn.className = 'effect-reorder-btn';
-                upBtn.textContent = '▲';
-                upBtn.disabled = index === 0;
-                upBtn.onclick = () => {
-                    this.moveEffect(track.id, effect.id, -1);
-                    this.renderEffectsPanel(container);
-                };
-                topRow.appendChild(upBtn);
-                
-                const downBtn = document.createElement('button');
-                downBtn.className = 'effect-reorder-btn';
-                downBtn.textContent = '▼';
-                downBtn.disabled = index === track.effects.length - 1;
-                downBtn.onclick = () => {
-                    this.moveEffect(track.id, effect.id, 1);
-                    this.renderEffectsPanel(container);
-                };
-                topRow.appendChild(downBtn);
-                
-                const removeBtn = document.createElement('button');
-                removeBtn.className = 'effect-remove-btn';
-                removeBtn.textContent = '✕';
-                removeBtn.onclick = () => {
-                    this.removeEffectFromTrack(track.id, effect.id);
-                    this.renderEffectsPanel(container);
-                };
-                topRow.appendChild(removeBtn);
-                
-                slot.appendChild(topRow);
-                
-                // Parameters
-                const paramsContainer = document.createElement('div');
-                paramsContainer.className = 'effect-params';
-                effect.renderUI(paramsContainer, track.id, effect.id, this);
-                slot.appendChild(paramsContainer);
-                
-                list.appendChild(slot);
-            });
-            
-            wrapper.appendChild(list);
-        }
-        
-        container.appendChild(wrapper);
-    }
-    
-    renderEditorPanel(container) {
-        container.innerHTML = `
-            <div class="panel-empty">
-                <p><strong>Track Editor</strong></p>
-                <p style="margin-top:8px">Select a track to edit its properties.</p>
-                ${this.selectedTrackId ? `<p style="margin-top:8px;color:#4CAF40">Track ${this.selectedTrackId} selected</p>` : ''}
-            </div>
-        `;
-    }
-    
-    renderLyricsPanel(container) {
-        const textarea = document.createElement('textarea');
-        textarea.className = 'lyrics-textarea';
-        textarea.placeholder = 'Write lyrics or notes here...';
-        textarea.value = this._lyricsText || '';
-        textarea.addEventListener('input', (e) => {
-            this._lyricsText = e.target.value;
+            this.dragState = {
+                blockId: block.id,
+                trackId: trackId,
+                startX: e.clientX,
+                startStartTime: block.startTime
+            };
+            blockEl.classList.add('dragging');
+            document.body.style.cursor = 'grabbing';
         });
-        container.appendChild(textarea);
-    }
-    
-    renderShortcutsPanel(container) {
-        container.innerHTML = `
-            <div class="shortcuts-list">
-                <div class="shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
-                <div class="shortcut-row"><kbd>R</kbd><span>Toggle Recording</span></div>
-                <div class="shortcut-row"><kbd>L</kbd><span>Toggle Loop</span></div>
-                <div class="shortcut-row"><kbd>Esc</kbd><span>Close Panel</span></div>
-            </div>
-        `;
     }
     
     setupPlayheadDrag() {
@@ -556,23 +163,24 @@ class JustDAW {
         const grid = this.elements.timelineGrid;
         
         const onMouseDown = (e) => {
-            const target = e.target;
-            if (target.closest('.audio-block')) return;
-            
+            if (e.target.closest('.audio-block')) return;
             this.isDraggingPlayhead = true;
             this.setPlayheadFromMouse(e);
             document.body.style.cursor = 'col-resize';
         };
-        
         const onMouseMove = (e) => {
-            if (!this.isDraggingPlayhead) return;
-            this.setPlayheadFromMouse(e);
+            if (this.isDraggingPlayhead) this.setPlayheadFromMouse(e);
+            if (this.dragState) this.handleBlockDrag(e);
         };
-        
         const onMouseUp = () => {
             if (this.isDraggingPlayhead) {
                 this.isDraggingPlayhead = false;
                 document.body.style.cursor = '';
+            }
+            if (this.dragState) {
+                const blockEl = document.getElementById(`block-${this.dragState.blockId}`);
+                if (blockEl) blockEl.classList.remove('dragging');
+                this.dragState = null;
             }
         };
         
@@ -582,447 +190,291 @@ class JustDAW {
         document.addEventListener('mouseup', onMouseUp);
     }
     
-    setPlayheadFromMouse(e) {
-        const target = e.currentTarget || e.target;
-        const rect = target.closest('.timeline-area').querySelector('.timeline-grid').getBoundingClientRect();
-        const scrollLeft = this.elements.timelineGrid.scrollLeft;
-        const x = e.clientX - rect.left + scrollLeft;
-        const time = Math.max(0, x / this.pixelsPerSecond);
+    handleBlockDrag(e) {
+        if (!this.dragState) return;
+        const ds = this.dragState;
+        const track = this.tracks.find(t => t.id === ds.trackId);
+        if (!track) return;
+        const block = track.blocks.find(b => b.id === ds.blockId);
+        if (!block) return;
         
-        const wasPlaying = this.isPlaying;
-        if (wasPlaying) {
-            this.tracks.forEach(track => {
-                if (track.sourceNode) {
-                    try { track.sourceNode.stop(); } catch (e) {}
-                    track.sourceNode = null;
-                }
-            });
+        const dx = e.clientX - ds.startX;
+        const dt = dx / this.pixelsPerSecond;
+        let newStart = ds.startStartTime + dt;
+        if (newStart < 0) newStart = 0;
+        
+        const duration = block.duration;
+        block.startTime = newStart;
+        block.endTime = newStart + duration;
+        
+        // Update DOM
+        const blockEl = document.getElementById(`block-${ds.blockId}`);
+        if (blockEl) {
+            blockEl.style.left = `${newStart * this.pixelsPerSecond}px`;
         }
         
-        this.currentTime = time;
-        this.playStartTime = this.audioContext.currentTime - this.currentTime;
-        this.elements.timeDisplay.textContent = this.formatTime(this.currentTime);
-        this.updatePlayheadPosition();
-        
-        if (wasPlaying) {
-            this.playFromCurrentTime();
-        }
+        // Redraw waveform
+        this.drawTrackWaveforms(track);
     }
     
-    selectTrack(trackId) {
-        // Deselect previous
-        if (this.selectedTrackId) {
-            const prevHeader = document.getElementById(`header-${this.selectedTrackId}`);
-            if (prevHeader) prevHeader.classList.remove('selected');
-        }
+    // ─── Block Copy/Paste ───────────────────────────────────────────────────
+    copySelectedBlock() {
+        if (!this.selectedBlockId || !this.selectedTrackId) return;
+        const track = this.tracks.find(t => t.id === this.selectedTrackId);
+        if (!track) return;
+        const block = track.blocks.find(b => b.id === this.selectedBlockId);
+        if (!block || !block.audioBuffer) return;
         
-        this.selectedTrackId = trackId;
-        
-        if (trackId) {
-            const header = document.getElementById(`header-${trackId}`);
-            if (header) header.classList.add('selected');
+        // Deep copy the audio buffer
+        const copyBuffer = this.audioContext.createBuffer(
+            block.audioBuffer.numberOfChannels,
+            block.audioBuffer.length,
+            block.audioBuffer.sampleRate
+        );
+        for (let ch = 0; ch < block.audioBuffer.numberOfChannels; ch++) {
+            copyBuffer.getChannelData(ch).set(block.audioBuffer.getChannelData(ch));
         }
-        
-        // If effects panel is open, refresh it
-        if (this.activePanel === 'effects') {
-            this.openBottomPanel('effects');
-        }
+        this.clipboard = { audioBuffer: copyBuffer };
     }
     
-    addTrack() {
-        const trackId = this.nextTrackId++;
-        const track = {
-            id: trackId,
-            name: `Track ${trackId}`,
-            volume: 0.8,
-            pan: 0,
-            muted: false,
-            soloed: false,
-            armed: false,
-            blocks: [],
-            sourceNode: null,
-            gainNode: this.audioContext.createGain(),
-            panNode: this.audioContext.createStereoPanner(),
-            mediaStream: null,
-            mediaRecorder: null,
-            chunks: [],
-            recordingStartTime: null,
-            recordingBlockId: null,
-            inputDeviceId: null,
-            effects: [],
-            nextEffectId: 1
+    pasteBlock() {
+        if (!this.clipboard || !this.selectedTrackId) return;
+        const track = this.tracks.find(t => t.id === this.selectedTrackId);
+        if (!track) return;
+        
+        const pasteTime = this.currentTime;
+        const block = {
+            id: this.nextBlockId++,
+            audioBuffer: this.clipboard.audioBuffer,
+            startTime: pasteTime,
+            endTime: pasteTime + this.clipboard.audioBuffer.duration,
+            duration: this.clipboard.audioBuffer.duration
         };
-        
-        this.rebuildTrackAudioGraph(track);
-        
-        this.tracks.push(track);
-        this.renderTrackHeader(track);
-        this.renderTrackRow(track);
-        this.updateTrackAudio(track);
-        
-        // Auto-select new track
-        this.selectTrack(trackId);
+        track.blocks.push(block);
+        this.drawTrackWaveforms(track);
+        this.renderAudioBlock(track, block);
     }
     
-    deleteTrack(trackId) {
-        const index = this.tracks.findIndex(t => t.id === trackId);
-        if (index > -1) {
-            const track = this.tracks[index];
-            if (track.sourceNode) {
-                try { track.sourceNode.stop(); } catch (e) {}
-            }
-            if (track.mediaRecorder && track.mediaRecorder.state !== 'inactive') {
-                track.mediaRecorder.stop();
-            }
-            if (track.mediaStream) {
-                track.mediaStream.getTracks().forEach(t => t.stop());
-            }
-            track.gainNode.disconnect();
-            track.panNode.disconnect();
-            track.effects.forEach(e => e.disconnect());
-            this.tracks.splice(index, 1);
-            
-            if (this.selectedTrackId === trackId) {
-                this.selectedTrackId = this.tracks.length > 0 ? this.tracks[0].id : null;
-                if (this.selectedTrackId) this.selectTrack(this.selectedTrackId);
-            }
-            
-            const header = document.getElementById(`header-${trackId}`);
-            const row = document.getElementById(`row-${trackId}`);
-            if (header) header.remove();
-            if (row) row.remove();
+    deleteSelectedBlock() {
+        if (!this.selectedBlockId || !this.selectedTrackId) return;
+        this.deleteBlock(this.selectedTrackId, this.selectedBlockId);
+        this.selectedBlockId = null;
+    }
+    
+    // ─── Event Listeners ────────────────────────────────────────────────────
+    setupEventListeners() {
+        this.elements.playBtn.addEventListener('click', () => this.togglePlayback());
+        this.elements.stopBtn.addEventListener('click', () => this.stop());
+        this.elements.recordBtn.addEventListener('click', () => this.toggleRecording());
+        this.elements.loopBtn.addEventListener('click', () => this.toggleLoop());
+        this.elements.addTrackBtn.addEventListener('click', () => this.addTrack());
+        this.elements.bpmInput.addEventListener('change', (e) => this.setBPM(e.target.value));
+        this.elements.masterVol.addEventListener('input', (e) => this.setMasterVolume(e.target.value));
+        
+        if (this.elements.bottomPanelClose) {
+            this.elements.bottomPanelClose.addEventListener('click', () => this.closeBottomPanel());
         }
+        
+        this.elements.timelineGrid.addEventListener('scroll', (e) => {
+            this.timelineScrollLeft = e.target.scrollLeft;
+            this.elements.timelineRuler.scrollLeft = e.target.scrollLeft;
+        });
+        
+        // Drag and drop files
+        const dz = this.elements.dropZone;
+        const ta = this.elements.timelineArea;
+        ta.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('active'); });
+        ta.addEventListener('dragleave', (e) => { if (!ta.contains(e.relatedTarget)) dz.classList.remove('active'); });
+        ta.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('active'); this.handleFileDrop(e.dataTransfer.files); });
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+            
+            switch(e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    this.togglePlayback();
+                    break;
+                case 'KeyR':
+                    if (!e.ctrlKey && !e.metaKey) this.toggleRecording();
+                    break;
+                case 'KeyL':
+                    this.toggleLoop();
+                    break;
+                case 'Escape':
+                    this.closeBottomPanel();
+                    this.selectBlock(null);
+                    break;
+                case 'KeyC':
+                    if (e.ctrlKey || e.metaKey) { e.preventDefault(); this.copySelectedBlock(); }
+                    break;
+                case 'KeyV':
+                    if (e.ctrlKey || e.metaKey) { e.preventDefault(); this.pasteBlock(); }
+                    break;
+                case 'Delete':
+                case 'Backspace':
+                    e.preventDefault();
+                    this.deleteSelectedBlock();
+                    break;
+            }
+        });
     }
     
-    rebuildTrackAudioGraph(track) {
-        try { track.gainNode.disconnect(); } catch (e) {}
-        try { track.panNode.disconnect(); } catch (e) {}
-        track.effects.forEach(effect => effect.disconnect());
-
+    // ─── Tool Tray & Bottom Panel ───────────────────────────────────────────
+    setupToolTray() {
+        const map = { 'Fx Effects': 'effects', 'Editor': 'editor', 'Lyrics/Notes': 'lyrics', 'Shortcuts': 'shortcuts' };
+        this.elements.toolTray.querySelectorAll('.tool-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const panel = map[btn.textContent.trim()];
+                if (!panel) return;
+                if (this.activePanel === panel) this.closeBottomPanel();
+                else this.openBottomPanel(panel);
+            });
+        });
+    }
+    
+    openBottomPanel(panel) {
+        this.activePanel = panel;
+        const c = this.elements.bottomPanelContent;
+        c.innerHTML = '';
+        const btns = this.elements.toolTray.querySelectorAll('.tool-btn');
+        btns.forEach(b => b.classList.toggle('active',
+            b.textContent.trim().toLowerCase().includes(panel) ||
+            (panel === 'effects' && b.textContent.trim() === 'Fx Effects')));
+        
+        if (panel === 'effects') {
+            this.elements.bottomPanelTitle.textContent = 'Effects — ' + (this.selectedTrackId ? this.tracks.find(t => t.id === this.selectedTrackId)?.name || 'Track ' + this.selectedTrackId : 'No Track Selected');
+            this.renderEffectsPanel(c);
+        } else if (panel === 'editor') {
+            this.elements.bottomPanelTitle.textContent = 'Editor';
+            c.innerHTML = `<div class="panel-empty"><p><strong>Track Editor</strong></p><p style="margin-top:8px">${this.selectedTrackId ? 'Track ' + this.selectedTrackId + ' selected' : 'Select a track first'}</p></div>`;
+        } else if (panel === 'lyrics') {
+            this.elements.bottomPanelTitle.textContent = 'Lyrics/Notes';
+            const ta = document.createElement('textarea');
+            ta.className = 'lyrics-textarea';
+            ta.placeholder = 'Write lyrics or notes here...';
+            ta.value = this._lyricsText;
+            ta.addEventListener('input', (e) => { this._lyricsText = e.target.value; });
+            c.appendChild(ta);
+        } else if (panel === 'shortcuts') {
+            this.elements.bottomPanelTitle.textContent = 'Shortcuts';
+            c.innerHTML = `<div class="shortcuts-list">
+                <div class="shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
+                <div class="shortcut-row"><kbd>R</kbd><span>Toggle Recording</span></div>
+                <div class="shortcut-row"><kbd>L</kbd><span>Toggle Loop</span></div>
+                <div class="shortcut-row"><kbd>Ctrl+C</kbd><span>Copy Block</span></div>
+                <div class="shortcut-row"><kbd>Ctrl+V</kbd><span>Paste Block</span></div>
+                <div class="shortcut-row"><kbd>Del</kbd><span>Delete Block</span></div>
+                <div class="shortcut-row"><kbd>Esc</kbd><span>Deselect / Close Panel</span></div>
+            </div>`;
+        }
+        this.elements.bottomPanel.classList.add('open');
+    }
+    
+    closeBottomPanel() {
+        this.activePanel = null;
+        this.elements.bottomPanel.classList.remove('open');
+        this.elements.toolTray.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+    }
+    
+    renderEffectsPanel(container) {
+        const track = this.tracks.find(t => t.id === this.selectedTrackId);
+        if (!track) {
+            container.innerHTML = '<div class="panel-empty">Select a track to manage its effects.<br><br>Click on a track header or timeline row to select a track, then open this panel.</div>';
+            return;
+        }
+        
+        const wrapper = document.createElement('div');
+        wrapper.className = 'effects-panel';
+        
+        const addRow = document.createElement('div');
+        addRow.className = 'effects-add-row';
+        const sel = document.createElement('select');
+        sel.className = 'effects-type-select';
+        EffectFactory.getAvailableTypes().forEach(type => {
+            const o = document.createElement('option');
+            o.value = type;
+            o.textContent = EffectFactory.getDisplayName(type);
+            sel.appendChild(o);
+        });
+        addRow.appendChild(sel);
+        const addBtn = document.createElement('button');
+        addBtn.className = 'effects-add-btn';
+        addBtn.textContent = '+ Add Effect';
+        addBtn.onclick = () => { this.addEffectToTrack(track.id, sel.value); this.renderEffectsPanel(container); };
+        addRow.appendChild(addBtn);
+        wrapper.appendChild(addRow);
+        
         if (track.effects.length === 0) {
-            track.gainNode.connect(track.panNode);
-            track.panNode.connect(this.masterGain);
+            wrapper.innerHTML += '<div class="panel-empty">No effects on this track yet.<br>Select an effect type above and click "+ Add Effect".</div>';
         } else {
-            track.gainNode.connect(track.effects[0].nodes[0] || track.panNode);
-            for (let i = 0; i < track.effects.length; i++) {
-                const nextTarget = i < track.effects.length - 1
-                    ? (track.effects[i + 1].nodes[0] || track.panNode)
-                    : track.panNode;
-                track.effects[i].connect(track.effects[i].nodes[0] || track.gainNode, nextTarget);
-            }
-            track.panNode.connect(this.masterGain);
+            const list = document.createElement('div');
+            list.className = 'effects-list';
+            track.effects.forEach((effect, idx) => {
+                const slot = document.createElement('div');
+                slot.className = `effect-slot ${effect.enabled ? 'active' : 'bypassed'}`;
+                
+                const top = document.createElement('div');
+                top.className = 'effect-slot-top';
+                
+                const name = document.createElement('span');
+                name.className = 'effect-slot-name';
+                name.textContent = EffectFactory.getDisplayName(effect.type);
+                top.appendChild(name);
+                
+                const toggle = document.createElement('button');
+                toggle.className = 'effect-toggle-btn';
+                toggle.textContent = effect.enabled ? 'ON' : 'OFF';
+                toggle.onclick = () => { this.toggleEffect(track.id, effect.id); this.renderEffectsPanel(container); };
+                top.appendChild(toggle);
+                
+                const up = document.createElement('button');
+                up.className = 'effect-reorder-btn';
+                up.textContent = '▲';
+                up.disabled = idx === 0;
+                up.onclick = () => { this.moveEffect(track.id, effect.id, -1); this.renderEffectsPanel(container); };
+                top.appendChild(up);
+                
+                const down = document.createElement('button');
+                down.className = 'effect-reorder-btn';
+                down.textContent = '▼';
+                down.disabled = idx === track.effects.length - 1;
+                down.onclick = () => { this.moveEffect(track.id, effect.id, 1); this.renderEffectsPanel(container); };
+                top.appendChild(down);
+                
+                const rm = document.createElement('button');
+                rm.className = 'effect-remove-btn';
+                rm.textContent = '✕';
+                rm.onclick = () => { this.removeEffectFromTrack(track.id, effect.id); this.renderEffectsPanel(container); };
+                top.appendChild(rm);
+                
+                slot.appendChild(top);
+                
+                const params = document.createElement('div');
+                params.className = 'effect-params';
+                effect.renderUI(params, track.id, effect.id, this);
+                slot.appendChild(params);
+                
+                list.appendChild(slot);
+            });
+            wrapper.appendChild(list);
         }
-    }
-
-    addEffectToTrack(trackId, effectType) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (!track) return;
-
-        const effect = EffectFactory.create(this.audioContext, effectType);
-        if (!effect) return;
-
-        effect.id = track.nextEffectId++;
-        track.effects.push(effect);
-        this.rebuildTrackAudioGraph(track);
-    }
-
-    removeEffectFromTrack(trackId, effectId) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (!track) return;
-
-        const index = track.effects.findIndex(e => e.id === effectId);
-        if (index > -1) {
-            track.effects[index].disconnect();
-            track.effects.splice(index, 1);
-            this.rebuildTrackAudioGraph(track);
-        }
-    }
-
-    toggleEffect(trackId, effectId) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (!track) return;
-
-        const effect = track.effects.find(e => e.id === effectId);
-        if (effect) {
-            effect.toggle();
-            this.rebuildTrackAudioGraph(track);
-        }
-    }
-
-    moveEffect(trackId, effectId, direction) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (!track) return;
-
-        const index = track.effects.findIndex(e => e.id === effectId);
-        if (index === -1) return;
-
-        const newIndex = index + direction;
-        if (newIndex < 0 || newIndex >= track.effects.length) return;
-
-        [track.effects[index], track.effects[newIndex]] = [track.effects[newIndex], track.effects[index]];
-        this.rebuildTrackAudioGraph(track);
+        container.appendChild(wrapper);
     }
     
-    renderTrackHeader(track) {
-        const header = document.createElement('div');
-        header.className = 'track-header';
-        if (track.id === this.selectedTrackId) header.classList.add('selected');
-        header.id = `header-${track.id}`;
-        
-        // Click to select track
-        header.addEventListener('click', (e) => {
-            // Don't select if clicking on buttons/inputs
-            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-            this.selectTrack(track.id);
-        });
-        
-        header.innerHTML = `
-            <div class="track-header-top">
-                <span class="track-name" id="name-${track.id}">${track.name}</span>
-                <button class="delete-track-btn" data-track-id="${track.id}" title="Delete Track">✕</button>
-            </div>
-            <div class="track-controls">
-                <button id="mute-${track.id}" class="mute-btn" title="Mute">M</button>
-                <button id="solo-${track.id}" class="solo-btn" title="Solo">S</button>
-                <button id="arm-${track.id}" class="arm-btn" title="Record Arm">R</button>
-            </div>
-            <div class="track-input-selector">
-                <label>Input:</label>
-                <select id="input-select-${track.id}">
-                    <option value="">Default</option>
-                </select>
-            </div>
-            <div class="track-faders">
-                <div class="fader-row">
-                    <label>Vol</label>
-                    <input type="range" min="0" max="1" step="0.01" value="${track.volume}">
-                </div>
-                <div class="fader-row">
-                    <label>Pan</label>
-                    <input type="range" min="-1" max="1" step="0.01" value="${track.pan}">
-                </div>
-            </div>
-            <div class="track-effects-indicator" id="effects-ind-${track.id}">
-                ${track.effects.length > 0 ? `<span class="effects-badge">${track.effects.length} FX</span>` : ''}
-            </div>
-        `;
-        
-        this.elements.trackHeaders.appendChild(header);
-        
-        // Wire up controls
-        header.querySelector('.delete-track-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.deleteTrack(track.id);
-        });
-        header.querySelector('.mute-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.toggleMute(track.id);
-        });
-        header.querySelector('.solo-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.toggleSolo(track.id);
-        });
-        header.querySelector('.arm-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.toggleArm(track.id);
-        });
-        header.querySelector('.track-faders input[type="range"]').addEventListener('input', (e) => {
-            e.stopPropagation();
-            this.setTrackVolume(track.id, e.target.value);
-        });
-        header.querySelectorAll('.track-faders input[type="range"]')[1].addEventListener('input', (e) => {
-            e.stopPropagation();
-            this.setTrackPan(track.id, e.target.value);
-        });
-        header.querySelector('#input-select-' + track.id).addEventListener('change', (e) => {
-            e.stopPropagation();
-            track.inputDeviceId = e.target.value || null;
-        });
-        
-        // Populate input selector
-        this.renderTrackInputSelector(track);
-    }
-    
-    renderTrackRow(track) {
-        const row = document.createElement('div');
-        row.className = 'track-row';
-        row.id = `row-${track.id}`;
-        row.innerHTML = `<canvas id="canvas-${track.id}"></canvas>`;
-        this.elements.timelineGrid.appendChild(row);
-        
-        requestAnimationFrame(() => this.setupCanvas(track));
-    }
-    
-    setupCanvas(track) {
-        const canvas = document.getElementById(`canvas-${track.id}`);
-        if (!canvas) return;
-        
-        const row = document.getElementById(`row-${track.id}`);
-        if (!row) return;
-        
-        const rect = row.getBoundingClientRect();
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-        
-        this.drawEmptyWaveform(track);
-    }
-    
-    drawEmptyWaveform(track) {
-        const canvas = document.getElementById(`canvas-${track.id}`);
-        if (!canvas) return;
-        
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#1e1e1e';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        ctx.strokeStyle = '#333';
-        ctx.beginPath();
-        ctx.moveTo(0, canvas.height / 2);
-        ctx.lineTo(canvas.width, canvas.height / 2);
-        ctx.stroke();
-    }
-    
-    renderRuler() {
-        const ruler = this.elements.timelineRuler;
-        ruler.innerHTML = '';
-        
-        const width = Math.max(ruler.offsetWidth, this.elements.timelineGrid.scrollWidth);
-        const totalSeconds = Math.max(width / this.pixelsPerSecond, 120);
-        
-        const content = document.createElement('div');
-        content.style.position = 'relative';
-        content.style.width = `${totalSeconds * this.pixelsPerSecond}px`;
-        content.style.height = '100%';
-        
-        const beatsPerSecond = this.bpm / 60;
-        const pixelsPerBeat = this.pixelsPerSecond / beatsPerSecond;
-        const totalBeats = Math.ceil(totalSeconds * beatsPerSecond);
-        
-        for (let beat = 0; beat < totalBeats; beat++) {
-            const isMeasure = beat % 4 === 0;
-            const x = beat * pixelsPerBeat;
-            
-            const mark = document.createElement('div');
-            mark.style.position = 'absolute';
-            mark.style.left = `${x}px`;
-            mark.style.top = '0';
-            mark.style.width = '1px';
-            mark.style.height = isMeasure ? '20px' : '10px';
-            mark.style.backgroundColor = isMeasure ? '#888' : '#555';
-            
-            content.appendChild(mark);
-            
-            if (isMeasure) {
-                const measureNum = Math.floor(beat / 4) + 1;
-                const label = document.createElement('span');
-                label.textContent = measureNum.toString();
-                label.style.position = 'absolute';
-                label.style.left = `${x + 3}px`;
-                label.style.top = '2px';
-                label.style.fontSize = '10px';
-                label.style.color = '#aaa';
-                label.style.fontWeight = 'bold';
-                content.appendChild(label);
-            }
-        }
-        
-        ruler.appendChild(content);
-    }
-    
-    updateTrackAudio(track) {
-        const hasSolo = this.tracks.some(t => t.soloed);
-        
-        if (hasSolo) {
-            track.gainNode.gain.value = track.soloed ? track.volume : 0;
-        } else {
-            track.gainNode.gain.value = track.muted ? 0 : track.volume;
-        }
-        track.panNode.pan.value = track.pan;
-    }
-    
-    toggleMute(trackId) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (track) {
-            track.muted = !track.muted;
-            this.updateTrackAudio(track);
-            const btn = document.getElementById(`mute-${trackId}`);
-            if (btn) btn.classList.toggle('active', track.muted);
-        }
-    }
-    
-    toggleSolo(trackId) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (track) {
-            track.soloed = !track.soloed;
-            this.handleSolo();
-            const btn = document.getElementById(`solo-${trackId}`);
-            if (btn) btn.classList.toggle('active', track.soloed);
-        }
-    }
-    
-    handleSolo() {
-        const hasSolo = this.tracks.some(t => t.soloed);
-        this.tracks.forEach(track => {
-            if (hasSolo) {
-                track.gainNode.gain.value = track.soloed ? track.volume : 0;
-            } else {
-                track.gainNode.gain.value = track.muted ? 0 : track.volume;
-            }
-        });
-    }
-    
-    toggleArm(trackId) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (track) {
-            track.armed = !track.armed;
-            const btn = document.getElementById(`arm-${trackId}`);
-            if (btn) btn.classList.toggle('active', track.armed);
-        }
-    }
-    
-    setTrackVolume(trackId, value) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (track) {
-            track.volume = parseFloat(value);
-            this.updateTrackAudio(track);
-        }
-    }
-    
-    setTrackPan(trackId, value) {
-        const track = this.tracks.find(t => t.id === trackId);
-        if (track) {
-            track.pan = parseFloat(value);
-            this.updateTrackAudio(track);
-        }
-    }
-    
-    setBPM(value) {
-        this.bpm = parseInt(value);
-        this.renderRuler();
-    }
-    
-    setMasterVolume(value) {
-        if (this.masterGain) {
-            this.masterGain.gain.value = parseFloat(value);
-        }
-    }
-    
+    // ─── Transport ──────────────────────────────────────────────────────────
     async togglePlayback() {
         this.initAudio();
-        if (this.isPlaying) {
-            this.pause();
-        } else {
-            this.play();
-        }
+        if (this.isPlaying) this.pause();
+        else this.play();
     }
     
     play() {
         if (this.tracks.length === 0) return;
-        
         this.isPlaying = true;
         this.elements.playBtn.classList.add('active');
         this.elements.playBtn.textContent = '⏸';
-        
         this.playStartTime = this.audioContext.currentTime - this.currentTime;
         this.playFromCurrentTime();
         this.updatePlayhead();
@@ -1030,22 +482,14 @@ class JustDAW {
     
     playFromCurrentTime() {
         this.tracks.forEach(track => {
-            if (track.sourceNode) {
-                try { track.sourceNode.stop(); } catch (e) {}
-                track.sourceNode = null;
-            }
-            
+            if (track.sourceNode) { try { track.sourceNode.stop(); } catch(e){} track.sourceNode = null; }
             track.blocks.forEach(block => {
                 if (this.currentTime >= block.startTime && this.currentTime < block.endTime) {
-                    const sourceNode = this.audioContext.createBufferSource();
-                    sourceNode.buffer = block.audioBuffer;
-                    sourceNode.connect(track.gainNode);
-                    
-                    const offsetInBlock = this.currentTime - block.startTime;
-                    const remainingDuration = block.endTime - this.currentTime;
-                    
-                    sourceNode.start(0, offsetInBlock, remainingDuration);
-                    track.sourceNode = sourceNode;
+                    const src = this.audioContext.createBufferSource();
+                    src.buffer = block.audioBuffer;
+                    src.connect(track.gainNode);
+                    src.start(0, this.currentTime - block.startTime, block.endTime - this.currentTime);
+                    track.sourceNode = src;
                 }
             });
         });
@@ -1055,20 +499,9 @@ class JustDAW {
         this.isPlaying = false;
         this.elements.playBtn.classList.remove('active');
         this.elements.playBtn.textContent = '▶';
-        
         this.currentTime = this.audioContext.currentTime - this.playStartTime;
-        
-        this.tracks.forEach(track => {
-            if (track.sourceNode) {
-                try { track.sourceNode.stop(); } catch (e) {}
-                track.sourceNode = null;
-            }
-        });
-        
-        if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
-        }
+        this.tracks.forEach(t => { if (t.sourceNode) { try { t.sourceNode.stop(); } catch(e){} t.sourceNode = null; } });
+        if (this.animationFrameId) { cancelAnimationFrame(this.animationFrameId); this.animationFrameId = null; }
     }
     
     stop() {
@@ -1078,159 +511,58 @@ class JustDAW {
         this.elements.playBtn.classList.remove('active');
         this.elements.playBtn.textContent = '▶';
         this.elements.recordBtn.classList.remove('active');
-        
-        this.tracks.forEach(track => {
-            if (track.sourceNode) {
-                try { track.sourceNode.stop(); } catch (e) {}
-                track.sourceNode = null;
-            }
-            if (track.mediaRecorder && track.mediaRecorder.state !== 'inactive') {
-                track.mediaRecorder.stop();
-            }
+        this.tracks.forEach(t => {
+            if (t.sourceNode) { try { t.sourceNode.stop(); } catch(e){} t.sourceNode = null; }
+            if (t.mediaRecorder && t.mediaRecorder.state !== 'inactive') t.mediaRecorder.stop();
         });
-        
-        if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
-        }
-        
+        if (this.animationFrameId) { cancelAnimationFrame(this.animationFrameId); this.animationFrameId = null; }
         this.elements.timeDisplay.textContent = '00:00.000';
         this.updatePlayheadPosition();
     }
     
-    async toggleRecording() {
-        this.initAudio();
-        if (this.isRecording) {
-            this.stopRecording();
-        } else {
-            await this.startRecording();
-        }
-    }
-    
-    async startRecording() {
-        if (!this.micPermissionGranted) {
-            try {
-                const result = await navigator.permissions.query({ name: 'microphone' });
-                if (result.state === 'denied') {
-                    this.showPermissionDeniedModal();
-                    return;
-                }
-            } catch (e) {}
-            
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach(t => t.stop());
-                this.micPermissionGranted = true;
-                this.hideMicPermissionButton();
-                await this.enumerateAudioInputs();
-            } catch (err) {
-                this.showPermissionDeniedModal();
-                return;
-            }
-        }
-        
-        const armedTracks = this.tracks.filter(t => t.armed);
-        if (armedTracks.length === 0) {
-            alert('Please arm at least one track (click the R button) before recording.');
-            return;
-        }
-        
-        this.isRecording = true;
-        this.elements.recordBtn.classList.add('active');
-        
-        const recordStartTime = this.isPlaying ? this.currentTime : 0;
-        
-        for (const track of armedTracks) {
-            await this.startTrackRecording(track, recordStartTime);
-        }
-        
-        if (!this.isPlaying) {
-            this.playStartTime = this.audioContext.currentTime;
-            this.currentTime = 0;
-            this.updatePlayhead();
-        }
-    }
-    
-    async startTrackRecording(track, recordStartTime) {
-        try {
-            const constraints = {
-                audio: {
-                    echoCancellation: false,
-                    noiseSuppression: false,
-                    autoGainControl: false
-                }
-            };
-            
-            if (track.inputDeviceId) {
-                constraints.audio.deviceId = { exact: track.inputDeviceId };
-            }
-            
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            track.mediaStream = stream;
-            
-            const source = this.audioContext.createMediaStreamSource(stream);
-            source.connect(track.gainNode);
-            
-            let mimeType = 'audio/webm';
-            if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-                mimeType = 'audio/webm;codecs=opus';
-            }
-            
-            track.mediaRecorder = new MediaRecorder(stream, { mimeType });
-            track.chunks = [];
-            track.recordingStartTime = recordStartTime;
-            
-            track.mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0) track.chunks.push(e.data);
-            };
-            
-            track.mediaRecorder.onstop = async () => {
-                if (track.chunks.length > 0) {
-                    const blob = new Blob(track.chunks, { type: mimeType });
-                    const arrayBuffer = await blob.arrayBuffer();
-                    try {
-                        const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-                        
-                        const block = {
-                            id: this.nextBlockId++,
-                            audioBuffer: audioBuffer,
-                            startTime: track.recordingStartTime,
-                            endTime: track.recordingStartTime + audioBuffer.duration,
-                            duration: audioBuffer.duration
-                        };
-                        
-                        track.blocks.push(block);
-                        this.drawTrackWaveforms(track);
-                        this.renderAudioBlock(track, block);
-                    } catch (err) {
-                        console.error('Decode error:', err);
+    updatePlayhead() {
+        if (!this.isPlaying && !this.isRecording) return;
+        this.currentTime = this.audioContext.currentTime - this.playStartTime;
+        if (this.isLooping && this.currentTime >= this.loopEnd) {
+            this.currentTime = this.loopStart;
+            this.playStartTime = this.audioContext.currentTime - this.loopStart;
+            this.tracks.forEach(t => {
+                if (t.sourceNode) { try { t.sourceNode.stop(); } catch(e){} t.sourceNode = null; }
+                t.blocks.forEach(b => {
+                    if (this.currentTime >= b.startTime && this.currentTime < b.endTime) {
+                        const s = this.audioContext.createBufferSource();
+                        s.buffer = b.audioBuffer; s.connect(t.gainNode);
+                        s.loop = true; s.loopStart = this.loopStart; s.loopEnd = this.loopEnd;
+                        s.start(0, this.loopStart); t.sourceNode = s;
                     }
-                }
-                stream.getTracks().forEach(t => t.stop());
-                track.mediaStream = null;
-                track.recordingStartTime = null;
-            };
-            
-            track.mediaRecorder.start();
-        } catch (err) {
-            console.error('Recording error:', err);
+                });
+            });
         }
+        this.elements.timeDisplay.textContent = this.formatTime(this.currentTime);
+        this.updatePlayheadPosition();
+        this.animationFrameId = requestAnimationFrame(() => this.updatePlayhead());
     }
     
-    stopRecording() {
-        this.isRecording = false;
-        this.elements.recordBtn.classList.remove('active');
-        
-        this.tracks.forEach(track => {
-            if (track.mediaRecorder && track.mediaRecorder.state === 'recording') {
-                track.mediaRecorder.stop();
-            }
-        });
-        
-        if (!this.isPlaying && this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = null;
-        }
+    updatePlayheadPosition() {
+        let ph = document.querySelector('.playhead');
+        if (ph) ph.remove();
+        ph = document.createElement('div');
+        ph.className = 'playhead';
+        ph.style.left = `${this.currentTime * this.pixelsPerSecond}px`;
+        this.elements.timelineGrid.appendChild(ph);
+    }
+    
+    setPlayheadFromMouse(e) {
+        const rect = this.elements.timelineGrid.getBoundingClientRect();
+        const x = e.clientX - rect.left + this.elements.timelineGrid.scrollLeft;
+        const time = Math.max(0, x / this.pixelsPerSecond);
+        const wasPlaying = this.isPlaying;
+        if (wasPlaying) this.tracks.forEach(t => { if (t.sourceNode) { try { t.sourceNode.stop(); } catch(e){} t.sourceNode = null; } });
+        this.currentTime = time;
+        this.playStartTime = this.audioContext.currentTime - this.currentTime;
+        this.elements.timeDisplay.textContent = this.formatTime(this.currentTime);
+        this.updatePlayheadPosition();
+        if (wasPlaying) this.playFromCurrentTime();
     }
     
     toggleLoop() {
@@ -1238,277 +570,548 @@ class JustDAW {
         this.elements.loopBtn.classList.toggle('active', this.isLooping);
     }
     
-    updatePlayhead() {
-        if (!this.isPlaying && !this.isRecording) return;
-        
-        this.currentTime = this.audioContext.currentTime - this.playStartTime;
-        
-        if (this.isLooping && this.currentTime >= this.loopEnd) {
-            this.currentTime = this.loopStart;
-            this.playStartTime = this.audioContext.currentTime - this.loopStart;
-            
-            this.tracks.forEach(track => {
-                if (track.sourceNode) {
-                    try { track.sourceNode.stop(); } catch (e) {}
-                    track.sourceNode = null;
-                }
-                track.blocks.forEach(block => {
-                    if (this.currentTime >= block.startTime && this.currentTime < block.endTime) {
-                        const sourceNode = this.audioContext.createBufferSource();
-                        sourceNode.buffer = block.audioBuffer;
-                        sourceNode.connect(track.gainNode);
-                        sourceNode.loop = true;
-                        sourceNode.loopStart = this.loopStart;
-                        sourceNode.loopEnd = this.loopEnd;
-                        sourceNode.start(0, this.loopStart);
-                        track.sourceNode = sourceNode;
-                    }
-                });
-            });
+    setBPM(v) { this.bpm = parseInt(v); this.renderRuler(); }
+    setMasterVolume(v) { if (this.masterGain) this.masterGain.gain.value = parseFloat(v); }
+    
+    // ─── Recording ──────────────────────────────────────────────────────────
+    async toggleRecording() {
+        this.initAudio();
+        if (this.isRecording) this.stopRecording();
+        else await this.startRecording();
+    }
+    
+    async startRecording() {
+        if (!this.micPermissionGranted) {
+            try {
+                const r = await navigator.permissions.query({ name: 'microphone' });
+                if (r.state === 'denied') { this.showPermissionDeniedModal(); return; }
+            } catch(e){}
+            try {
+                const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                s.getTracks().forEach(t => t.stop());
+                this.micPermissionGranted = true;
+                this.hideMicPermissionButton();
+                await this.enumerateAudioInputs();
+            } catch(err) { this.showPermissionDeniedModal(); return; }
         }
-        
-        this.elements.timeDisplay.textContent = this.formatTime(this.currentTime);
-        this.updatePlayheadPosition();
-        
-        this.animationFrameId = requestAnimationFrame(() => this.updatePlayhead());
+        const armed = this.tracks.filter(t => t.armed);
+        if (armed.length === 0) { alert('Please arm at least one track (click the R button) before recording.'); return; }
+        this.isRecording = true;
+        this.elements.recordBtn.classList.add('active');
+        const t0 = this.isPlaying ? this.currentTime : 0;
+        for (const t of armed) await this.startTrackRecording(t, t0);
+        if (!this.isPlaying) { this.playStartTime = this.audioContext.currentTime; this.currentTime = 0; this.updatePlayhead(); }
     }
     
-    updatePlayheadPosition() {
-        const existingPlayhead = document.querySelector('.playhead');
-        if (existingPlayhead) existingPlayhead.remove();
-        
-        const playhead = document.createElement('div');
-        playhead.className = 'playhead';
-        playhead.style.left = `${this.currentTime * this.pixelsPerSecond}px`;
-        this.elements.timelineGrid.appendChild(playhead);
+    async startTrackRecording(track, t0) {
+        try {
+            const c = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
+            if (track.inputDeviceId) c.audio.deviceId = { exact: track.inputDeviceId };
+            const stream = await navigator.mediaDevices.getUserMedia(c);
+            track.mediaStream = stream;
+            const src = this.audioContext.createMediaStreamSource(stream);
+            src.connect(track.gainNode);
+            let mt = 'audio/webm';
+            if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mt = 'audio/webm;codecs=opus';
+            track.mediaRecorder = new MediaRecorder(stream, { mimeType: mt });
+            track.chunks = [];
+            track.recordingStartTime = t0;
+            track.mediaRecorder.ondataavailable = e => { if (e.data.size > 0) track.chunks.push(e.data); };
+            track.mediaRecorder.onstop = async () => {
+                if (track.chunks.length > 0) {
+                    const blob = new Blob(track.chunks, { type: mt });
+                    const ab = await blob.arrayBuffer();
+                    try {
+                        const buf = await this.audioContext.decodeAudioData(ab);
+                        const block = { id: this.nextBlockId++, audioBuffer: buf, startTime: track.recordingStartTime, endTime: track.recordingStartTime + buf.duration, duration: buf.duration };
+                        track.blocks.push(block);
+                        this.drawTrackWaveforms(track);
+                        this.renderAudioBlock(track, block);
+                    } catch(e) { console.error('Decode error:', e); }
+                }
+                stream.getTracks().forEach(t => t.stop());
+                track.mediaStream = null;
+                track.recordingStartTime = null;
+            };
+            track.mediaRecorder.start();
+        } catch(e) { console.error('Recording error:', e); }
     }
     
+    stopRecording() {
+        this.isRecording = false;
+        this.elements.recordBtn.classList.remove('active');
+        this.tracks.forEach(t => { if (t.mediaRecorder && t.mediaRecorder.state === 'recording') t.mediaRecorder.stop(); });
+        if (!this.isPlaying && this.animationFrameId) { cancelAnimationFrame(this.animationFrameId); this.animationFrameId = null; }
+    }
+    
+    // ─── Tracks ─────────────────────────────────────────────────────────────
+    addTrack() {
+        const id = this.nextTrackId++;
+        const track = {
+            id, name: `Track ${id}`, volume: 0.8, pan: 0, muted: false, soloed: false, armed: false,
+            blocks: [], sourceNode: null,
+            gainNode: this.audioContext.createGain(),
+            panNode: this.audioContext.createStereoPanner(),
+            mediaStream: null, mediaRecorder: null, chunks: [],
+            recordingStartTime: null, inputDeviceId: null,
+            effects: [], nextEffectId: 1
+        };
+        this.rebuildTrackAudioGraph(track);
+        this.tracks.push(track);
+        this.renderTrackHeader(track);
+        this.renderTrackRow(track);
+        this.updateTrackAudio(track);
+        this.selectTrack(id);
+    }
+    
+    deleteTrack(id) {
+        const idx = this.tracks.findIndex(t => t.id === id);
+        if (idx < 0) return;
+        const t = this.tracks[idx];
+        if (t.sourceNode) try { t.sourceNode.stop(); } catch(e){}
+        if (t.mediaRecorder && t.mediaRecorder.state !== 'inactive') t.mediaRecorder.stop();
+        if (t.mediaStream) t.mediaStream.getTracks().forEach(tr => tr.stop());
+        t.gainNode.disconnect(); t.panNode.disconnect();
+        t.effects.forEach(e => e.disconnect());
+        this.tracks.splice(idx, 1);
+        if (this.selectedTrackId === id) {
+            this.selectedTrackId = this.tracks.length > 0 ? this.tracks[0].id : null;
+            if (this.selectedTrackId) this.selectTrack(this.selectedTrackId);
+        }
+        const h = document.getElementById(`header-${id}`);
+        const r = document.getElementById(`row-${id}`);
+        if (h) h.remove();
+        if (r) r.remove();
+    }
+    
+    rebuildTrackAudioGraph(track) {
+        try { track.gainNode.disconnect(); } catch(e){}
+        try { track.panNode.disconnect(); } catch(e){}
+        track.effects.forEach(e => e.disconnect());
+        if (track.effects.length === 0) {
+            track.gainNode.connect(track.panNode);
+            track.panNode.connect(this.masterGain);
+        } else {
+            track.gainNode.connect(track.effects[0].nodes[0] || track.panNode);
+            for (let i = 0; i < track.effects.length; i++) {
+                const next = i < track.effects.length - 1 ? (track.effects[i+1].nodes[0] || track.panNode) : track.panNode;
+                track.effects[i].connect(track.effects[i].nodes[0] || track.gainNode, next);
+            }
+            track.panNode.connect(this.masterGain);
+        }
+    }
+    
+    renderTrackHeader(track) {
+        const h = document.createElement('div');
+        h.className = 'track-header' + (track.id === this.selectedTrackId ? ' selected' : '');
+        h.id = `header-${track.id}`;
+        h.innerHTML = `
+            <div class="track-header-top">
+                <span class="track-name">${track.name}</span>
+                <button class="delete-track-btn" title="Delete">✕</button>
+            </div>
+            <div class="track-controls">
+                <button class="mute-btn" title="Mute">M</button>
+                <button class="solo-btn" title="Solo">S</button>
+                <button class="arm-btn" title="Record Arm">R</button>
+            </div>
+            <div class="track-input-selector">
+                <label>Input:</label>
+                <select><option value="">Default</option></select>
+            </div>
+            <div class="track-faders">
+                <div class="fader-row"><label>Vol</label><input type="range" min="0" max="1" step="0.01" value="${track.volume}"></div>
+                <div class="fader-row"><label>Pan</label><input type="range" min="-1" max="1" step="0.01" value="${track.pan}"></div>
+            </div>
+            <div class="track-effects-indicator">${track.effects.length > 0 ? `<span class="effects-badge">${track.effects.length} FX</span>` : ''}</div>
+        `;
+        this.elements.trackHeaders.appendChild(h);
+        
+        h.querySelector('.delete-track-btn').onclick = (e) => { e.stopPropagation(); this.deleteTrack(track.id); };
+        h.querySelector('.mute-btn').onclick = (e) => { e.stopPropagation(); this.toggleMute(track.id); };
+        h.querySelector('.solo-btn').onclick = (e) => { e.stopPropagation(); this.toggleSolo(track.id); };
+        h.querySelector('.arm-btn').onclick = (e) => { e.stopPropagation(); this.toggleArm(track.id); };
+        h.querySelector('.track-faders input[type="range"]').oninput = (e) => { e.stopPropagation(); this.setTrackVolume(track.id, e.target.value); };
+        h.querySelectorAll('.track-faders input[type="range"]')[1].oninput = (e) => { e.stopPropagation(); this.setTrackPan(track.id, e.target.value); };
+        h.querySelector('.track-input-selector select').onchange = (e) => { e.stopPropagation(); track.inputDeviceId = e.target.value || null; };
+        
+        this.renderTrackInputSelector(track);
+    }
+    
+    renderTrackInputSelector(track) {
+        const h = document.getElementById(`header-${track.id}`);
+        if (!h) return;
+        const sel = h.querySelector('.track-input-selector select');
+        if (!sel) return;
+        const cur = sel.value;
+        while (sel.options.length > 1) sel.remove(1);
+        this.audioInputDevices.forEach((d, i) => {
+            const o = document.createElement('option');
+            o.value = d.deviceId;
+            o.textContent = d.label || `Mic ${i+1}`;
+            sel.appendChild(o);
+        });
+        sel.value = cur;
+    }
+    
+    renderTrackRow(track) {
+        const row = document.createElement('div');
+        row.className = 'track-row' + (track.id === this.selectedTrackId ? ' selected' : '');
+        row.id = `row-${track.id}`;
+        row.innerHTML = `<canvas id="canvas-${track.id}"></canvas>`;
+        this.elements.timelineGrid.appendChild(row);
+        requestAnimationFrame(() => this.setupCanvas(track));
+    }
+    
+    setupCanvas(track) {
+        const c = document.getElementById(`canvas-${track.id}`);
+        if (!c) return;
+        const r = document.getElementById(`row-${track.id}`);
+        if (!r) return;
+        const rect = r.getBoundingClientRect();
+        c.width = rect.width; c.height = rect.height;
+        this.drawEmptyWaveform(track);
+    }
+    
+    drawEmptyWaveform(track) {
+        const c = document.getElementById(`canvas-${track.id}`);
+        if (!c) return;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#1e1e1e';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.strokeStyle = '#333';
+        ctx.beginPath(); ctx.moveTo(0, c.height/2); ctx.lineTo(c.width, c.height/2); ctx.stroke();
+    }
+    
+    updateTrackAudio(track) {
+        const hasSolo = this.tracks.some(t => t.soloed);
+        track.gainNode.gain.value = hasSolo ? (track.soloed ? track.volume : 0) : (track.muted ? 0 : track.volume);
+        track.panNode.pan.value = track.pan;
+    }
+    
+    toggleMute(id) {
+        const t = this.tracks.find(x => x.id === id);
+        if (t) { t.muted = !t.muted; this.updateTrackAudio(t); const b = document.querySelector(`#header-${id} .mute-btn`); if (b) b.classList.toggle('active', t.muted); }
+    }
+    toggleSolo(id) {
+        const t = this.tracks.find(x => x.id === id);
+        if (t) { t.soloed = !t.soloed; this.handleSolo(); const b = document.querySelector(`#header-${id} .solo-btn`); if (b) b.classList.toggle('active', t.soloed); }
+    }
+    handleSolo() {
+        const s = this.tracks.some(t => t.soloed);
+        this.tracks.forEach(t => { t.gainNode.gain.value = s ? (t.soloed ? t.volume : 0) : (t.muted ? 0 : t.volume); });
+    }
+    toggleArm(id) {
+        const t = this.tracks.find(x => x.id === id);
+        if (t) { t.armed = !t.armed; const b = document.querySelector(`#header-${id} .arm-btn`); if (b) b.classList.toggle('active', t.armed); }
+    }
+    setTrackVolume(id, v) { const t = this.tracks.find(x => x.id === id); if (t) { t.volume = parseFloat(v); this.updateTrackAudio(t); } }
+    setTrackPan(id, v) { const t = this.tracks.find(x => x.id === id); if (t) { t.pan = parseFloat(v); this.updateTrackAudio(t); } }
+    
+    // ─── Audio Blocks ───────────────────────────────────────────────────────
     renderAudioBlock(track, block) {
         const row = document.getElementById(`row-${track.id}`);
         if (!row) return;
+        let el = document.getElementById(`block-${block.id}`);
+        if (el) el.remove();
         
-        const existingBlock = document.getElementById(`block-${block.id}`);
-        if (existingBlock) existingBlock.remove();
-        
-        const blockEl = document.createElement('div');
-        blockEl.className = 'audio-block';
-        blockEl.id = `block-${block.id}`;
-        blockEl.style.left = `${block.startTime * this.pixelsPerSecond}px`;
-        blockEl.style.width = `${block.duration * this.pixelsPerSecond}px`;
+        el = document.createElement('div');
+        el.className = 'audio-block' + (block.id === this.selectedBlockId ? ' selected' : '');
+        el.id = `block-${block.id}`;
+        el.style.left = `${block.startTime * this.pixelsPerSecond}px`;
+        el.style.width = `${block.duration * this.pixelsPerSecond}px`;
         
         const label = document.createElement('span');
         label.className = 'audio-block-label';
-        label.textContent = `Recording ${block.id}`;
-        blockEl.appendChild(label);
+        label.textContent = `Clip ${block.id}`;
+        el.appendChild(label);
         
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'audio-block-delete';
-        deleteBtn.textContent = '✕';
-        deleteBtn.title = 'Delete block';
-        deleteBtn.onclick = (e) => {
-            e.stopPropagation();
-            this.deleteBlock(track.id, block.id);
-        };
-        blockEl.appendChild(deleteBtn);
+        const del = document.createElement('button');
+        del.className = 'audio-block-delete';
+        del.textContent = '✕';
+        del.title = 'Delete (Del)';
+        del.onclick = (e) => { e.stopPropagation(); this.deleteBlock(track.id, block.id); };
+        el.appendChild(del);
         
-        row.appendChild(blockEl);
+        row.appendChild(el);
+        this.setupBlockDrag(el, track.id, block);
     }
     
     deleteBlock(trackId, blockId) {
         const track = this.tracks.find(t => t.id === trackId);
         if (!track) return;
-        
-        const blockIndex = track.blocks.findIndex(b => b.id === blockId);
-        if (blockIndex > -1) {
-            track.blocks.splice(blockIndex, 1);
-            
-            const blockEl = document.getElementById(`block-${blockId}`);
-            if (blockEl) blockEl.remove();
-            
-            this.drawTrackWaveforms(track);
-        }
+        const idx = track.blocks.findIndex(b => b.id === blockId);
+        if (idx < 0) return;
+        track.blocks.splice(idx, 1);
+        const el = document.getElementById(`block-${blockId}`);
+        if (el) el.remove();
+        this.drawTrackWaveforms(track);
+        if (this.selectedBlockId === blockId) this.selectedBlockId = null;
     }
     
     drawTrackWaveforms(track) {
-        const canvas = document.getElementById(`canvas-${track.id}`);
-        if (!canvas) return;
-        
-        const row = document.getElementById(`row-${track.id}`);
-        if (row) {
-            const rect = row.getBoundingClientRect();
-            if (canvas.width !== rect.width) canvas.width = rect.width;
-            if (canvas.height !== rect.height) canvas.height = rect.height;
-        }
-        
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#1e1e1e';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        ctx.strokeStyle = '#333';
-        ctx.beginPath();
-        ctx.moveTo(0, canvas.height / 2);
-        ctx.lineTo(canvas.width, canvas.height / 2);
-        ctx.stroke();
-        
-        track.blocks.forEach(block => {
-            this.drawBlockWaveform(ctx, canvas, block);
-        });
+        const c = document.getElementById(`canvas-${track.id}`);
+        if (!c) return;
+        const r = document.getElementById(`row-${track.id}`);
+        if (r) { const rect = r.getBoundingClientRect(); if (c.width !== rect.width) c.width = rect.width; if (c.height !== rect.height) c.height = rect.height; }
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#1e1e1e'; ctx.fillRect(0, 0, c.width, c.height);
+        ctx.strokeStyle = '#333'; ctx.beginPath(); ctx.moveTo(0, c.height/2); ctx.lineTo(c.width, c.height/2); ctx.stroke();
+        track.blocks.forEach(b => this.drawBlockWaveform(ctx, c, b));
     }
     
     drawBlockWaveform(ctx, canvas, block) {
         if (!block.audioBuffer) return;
-        
         const data = block.audioBuffer.getChannelData(0);
         const amp = canvas.height / 2;
-        
-        const startPixel = block.startTime * this.pixelsPerSecond;
-        const blockPixelWidth = block.duration * this.pixelsPerSecond;
-        
-        const step = Math.ceil(data.length / blockPixelWidth);
-        
-        ctx.beginPath();
-        ctx.strokeStyle = '#4CAF50';
-        ctx.lineWidth = 1;
-        
-        for (let i = 0; i < blockPixelWidth; i++) {
-            const x = startPixel + i;
+        const startPx = block.startTime * this.pixelsPerSecond;
+        const blockPx = block.duration * this.pixelsPerSecond;
+        const step = Math.ceil(data.length / blockPx);
+        ctx.beginPath(); ctx.strokeStyle = '#4CAF50'; ctx.lineWidth = 1;
+        for (let i = 0; i < blockPx; i++) {
+            const x = startPx + i;
             if (x < 0 || x >= canvas.width) continue;
-            
-            let min = 1.0;
-            let max = -1.0;
+            let min = 1.0, max = -1.0;
             for (let j = 0; j < step; j++) {
                 const idx = Math.floor(i * step) + j;
-                if (idx < data.length) {
-                    const datum = data[idx];
-                    if (datum < min) min = datum;
-                    if (datum > max) max = datum;
-                }
+                if (idx < data.length) { const d = data[idx]; if (d < min) min = d; if (d > max) max = d; }
             }
-            ctx.lineTo(x, (1 + min) * amp);
-            ctx.lineTo(x, (1 + max) * amp);
+            ctx.lineTo(x, (1 + min) * amp); ctx.lineTo(x, (1 + max) * amp);
         }
         ctx.stroke();
     }
     
-    async handleFileDrop(files) {
-        for (const file of files) {
-            if (file.type.startsWith('audio/')) {
-                const arrayBuffer = await file.arrayBuffer();
-                try {
-                    const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-                    const trackId = this.nextTrackId++;
-                    
-                    const block = {
-                        id: this.nextBlockId++,
-                        audioBuffer: audioBuffer,
-                        startTime: 0,
-                        endTime: audioBuffer.duration,
-                        duration: audioBuffer.duration
-                    };
-                    
-                    const track = {
-                        id: trackId,
-                        name: file.name.replace(/\.[^/.]+$/, ''),
-                        volume: 0.8,
-                        pan: 0,
-                        muted: false,
-                        soloed: false,
-                        armed: false,
-                        blocks: [block],
-                        sourceNode: null,
-                        gainNode: this.audioContext.createGain(),
-                        panNode: this.audioContext.createStereoPanner(),
-                        mediaStream: null,
-                        mediaRecorder: null,
-                        chunks: [],
-                        recordingStartTime: null,
-                        inputDeviceId: null,
-                        effects: [],
-                        nextEffectId: 1
-                    };
-                    
-                    this.rebuildTrackAudioGraph(track);
-                    
-                    this.tracks.push(track);
-                    this.renderTrackHeader(track);
-                    this.renderTrackRow(track);
-                    this.updateTrackAudio(track);
-                    
-                    requestAnimationFrame(() => {
-                        this.drawTrackWaveforms(track);
-                        this.renderAudioBlock(track, block);
-                    });
-                } catch (err) {
-                    console.error('Error decoding audio:', err);
-                }
-            }
+    // ─── Effects ────────────────────────────────────────────────────────────
+    addEffectToTrack(trackId, type) {
+        const t = this.tracks.find(x => x.id === trackId);
+        if (!t) return;
+        const fx = EffectFactory.create(this.audioContext, type);
+        if (!fx) return;
+        fx.id = t.nextEffectId++;
+        t.effects.push(fx);
+        this.rebuildTrackAudioGraph(t);
+        this.updateEffectsIndicator(t);
+    }
+    removeEffectFromTrack(trackId, fxId) {
+        const t = this.tracks.find(x => x.id === trackId);
+        if (!t) return;
+        const idx = t.effects.findIndex(e => e.id === fxId);
+        if (idx < 0) return;
+        t.effects[idx].disconnect();
+        t.effects.splice(idx, 1);
+        this.rebuildTrackAudioGraph(t);
+        this.updateEffectsIndicator(t);
+    }
+    toggleEffect(trackId, fxId) {
+        const t = this.tracks.find(x => x.id === trackId);
+        if (!t) return;
+        const fx = t.effects.find(e => e.id === fxId);
+        if (fx) { fx.toggle(); this.rebuildTrackAudioGraph(t); this.updateEffectsIndicator(t); }
+    }
+    moveEffect(trackId, fxId, dir) {
+        const t = this.tracks.find(x => x.id === trackId);
+        if (!t) return;
+        const idx = t.effects.findIndex(e => e.id === fxId);
+        if (idx < 0) return;
+        const ni = idx + dir;
+        if (ni < 0 || ni >= t.effects.length) return;
+        [t.effects[idx], t.effects[ni]] = [t.effects[ni], t.effects[idx]];
+        this.rebuildTrackAudioGraph(t);
+    }
+    updateEffectsIndicator(track) {
+        const h = document.getElementById(`header-${track.id}`);
+        if (!h) return;
+        let ind = h.querySelector('.track-effects-indicator');
+        if (!ind) { ind = document.createElement('div'); ind.className = 'track-effects-indicator'; h.appendChild(ind); }
+        ind.innerHTML = track.effects.length > 0 ? `<span class="effects-badge">${track.effects.length} FX</span>` : '';
+    }
+    
+    // ─── Mic Permission ─────────────────────────────────────────────────────
+    async checkMicPermission() {
+        if (!navigator.mediaDevices?.getUserMedia) { this.showMicNotSupported(); return; }
+        if (navigator.permissions?.query) {
+            try {
+                const r = await navigator.permissions.query({ name: 'microphone' });
+                this.updateMicPermissionUI(r.state);
+                r.onchange = () => this.updateMicPermissionUI(r.state);
+                return;
+            } catch(e){}
+        }
+        try {
+            const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+            s.getTracks().forEach(t => t.stop());
+            this.micPermissionGranted = true;
+            this.hideMicPermissionButton();
+            await this.enumerateAudioInputs();
+        } catch(e) {
+            if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') this.showPermissionDeniedModal();
+            else this.showMicPermissionButton();
         }
     }
     
+    async enumerateAudioInputs() {
+        try {
+            const devs = await navigator.mediaDevices.enumerateDevices();
+            this.audioInputDevices = devs.filter(d => d.kind === 'audioinput');
+            this.tracks.forEach(t => this.renderTrackInputSelector(t));
+        } catch(e) { console.error(e); }
+    }
+    
+    updateMicPermissionUI(state) {
+        if (state === 'granted') { this.micPermissionGranted = true; this.hideMicPermissionButton(); this.enumerateAudioInputs(); }
+        else if (state === 'prompt') this.showMicPermissionButton();
+        else this.showPermissionDeniedModal();
+    }
+    
+    showMicPermissionButton() {
+        if (document.getElementById('mic-permission-btn')) return;
+        const b = document.createElement('button');
+        b.id = 'mic-permission-btn'; b.className = 'mic-permission-btn'; b.textContent = '🎤 Enable Microphone';
+        b.onclick = () => this.requestMicPermission();
+        this.elements.recordBtn.parentNode.insertBefore(b, this.elements.recordBtn);
+    }
+    hideMicPermissionButton() { const b = document.getElementById('mic-permission-btn'); if (b) b.remove(); }
+    
+    showMicNotSupported() {
+        if (document.getElementById('mic-not-supported-msg')) return;
+        const m = document.createElement('span');
+        m.id = 'mic-not-supported-msg'; m.style.color = '#ff9800'; m.style.fontSize = '12px'; m.textContent = '🎤 Mic not supported';
+        this.elements.recordBtn.parentNode.insertBefore(m, this.elements.recordBtn);
+    }
+    
+    async requestMicPermission() {
+        try {
+            const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+            s.getTracks().forEach(t => t.stop());
+            this.hideMicPermissionButton(); this.micPermissionGranted = true; await this.enumerateAudioInputs();
+        } catch(e) {
+            if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') this.showPermissionDeniedModal();
+            else alert('Could not access microphone: ' + e.message);
+        }
+    }
+    
+    showPermissionDeniedModal() {
+        const ex = document.getElementById('permission-modal');
+        if (ex) ex.remove();
+        const m = document.createElement('div');
+        m.id = 'permission-modal'; m.className = 'permission-modal';
+        m.innerHTML = `<div class="permission-modal-content">
+            <h3>Microphone Access Required</h3>
+            <p>To record audio, Just-DAW needs access to your microphone.</p>
+            <button id="permission-retry-btn" class="permission-retry-btn">Allow Microphone Access</button>
+            <button id="permission-close-btn" class="permission-close-btn">Close</button>
+        </div>`;
+        document.body.appendChild(m);
+        document.getElementById('permission-retry-btn').onclick = async () => {
+            try {
+                const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                s.getTracks().forEach(t => t.stop());
+                m.remove(); this.hideMicPermissionButton(); this.micPermissionGranted = true; await this.enumerateAudioInputs();
+            } catch(e) { alert('Permission denied.'); }
+        };
+        document.getElementById('permission-close-btn').onclick = () => m.remove();
+    }
+    
+    // ─── Ruler ──────────────────────────────────────────────────────────────
+    renderRuler() {
+        const ruler = this.elements.timelineRuler;
+        ruler.innerHTML = '';
+        const w = Math.max(ruler.offsetWidth, this.elements.timelineGrid.scrollWidth);
+        const totalSec = Math.max(w / this.pixelsPerSecond, 120);
+        const content = document.createElement('div');
+        content.style.position = 'relative';
+        content.style.width = `${totalSec * this.pixelsPerSecond}px`;
+        content.style.height = '100%';
+        const bps = this.bpm / 60;
+        const ppb = this.pixelsPerSecond / bps;
+        const totalBeats = Math.ceil(totalSec * bps);
+        for (let beat = 0; beat < totalBeats; beat++) {
+            const m = beat % 4 === 0;
+            const x = beat * ppb;
+            const mark = document.createElement('div');
+            mark.style.cssText = `position:absolute;left:${x}px;top:0;width:1px;height:${m ? 20 : 10}px;background:${m ? '#888' : '#555'};`;
+            content.appendChild(mark);
+            if (m) {
+                const lbl = document.createElement('span');
+                lbl.textContent = String(Math.floor(beat / 4) + 1);
+                lbl.style.cssText = `position:absolute;left:${x+3}px;top:2px;font-size:10px;color:#aaa;font-weight:bold;`;
+                content.appendChild(lbl);
+            }
+        }
+        ruler.appendChild(content);
+    }
+    
+    setupResizeHandler() {
+        new ResizeObserver(() => {
+            this.tracks.forEach(t => this.drawTrackWaveforms(t));
+            this.renderRuler();
+        }).observe(this.elements.timelineGrid);
+    }
+    
+    // ─── File Drop ──────────────────────────────────────────────────────────
+    async handleFileDrop(files) {
+        for (const file of files) {
+            if (!file.type.startsWith('audio/')) continue;
+            try {
+                const ab = await file.arrayBuffer();
+                const buf = await this.audioContext.decodeAudioData(ab);
+                const tid = this.nextTrackId++;
+                const block = { id: this.nextBlockId++, audioBuffer: buf, startTime: 0, endTime: buf.duration, duration: buf.duration };
+                const track = {
+                    id: tid, name: file.name.replace(/\.[^/.]+$/, ''), volume: 0.8, pan: 0,
+                    muted: false, soloed: false, armed: false,
+                    blocks: [block], sourceNode: null,
+                    gainNode: this.audioContext.createGain(), panNode: this.audioContext.createStereoPanner(),
+                    mediaStream: null, mediaRecorder: null, chunks: [],
+                    recordingStartTime: null, inputDeviceId: null,
+                    effects: [], nextEffectId: 1
+                };
+                this.rebuildTrackAudioGraph(track);
+                this.tracks.push(track);
+                this.renderTrackHeader(track);
+                this.renderTrackRow(track);
+                this.updateTrackAudio(track);
+                requestAnimationFrame(() => { this.drawTrackWaveforms(track); this.renderAudioBlock(track, block); });
+            } catch(e) { console.error('Error decoding audio:', e); }
+        }
+    }
+    
+    // ─── Meter ──────────────────────────────────────────────────────────────
     startRenderLoop() {
-        const meterCanvas = this.elements.masterMeter;
-        const ctx = meterCanvas.getContext('2d');
-        const bufferLength = this.analyser.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
-        
+        const mc = this.elements.masterMeter;
+        const ctx = mc.getContext('2d');
+        const len = this.analyser.frequencyBinCount;
+        const arr = new Uint8Array(len);
         const draw = () => {
             requestAnimationFrame(draw);
-            this.analyser.getByteTimeDomainData(dataArray);
-            
-            ctx.fillStyle = '#222';
-            ctx.fillRect(0, 0, meterCanvas.width, meterCanvas.height);
-            
-            ctx.lineWidth = 1;
-            ctx.strokeStyle = '#4CAF50';
-            ctx.beginPath();
-            
-            const sliceWidth = meterCanvas.width / bufferLength;
+            this.analyser.getByteTimeDomainData(arr);
+            ctx.fillStyle = '#222'; ctx.fillRect(0, 0, mc.width, mc.height);
+            ctx.lineWidth = 1; ctx.strokeStyle = '#4CAF50'; ctx.beginPath();
+            const sw = mc.width / len;
             let x = 0;
-            
-            for (let i = 0; i < bufferLength; i++) {
-                const v = dataArray[i] / 128.0;
-                const y = v * meterCanvas.height / 2;
-                
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-                
-                x += sliceWidth;
+            for (let i = 0; i < len; i++) {
+                const v = arr[i] / 128.0;
+                const y = v * mc.height / 2;
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                x += sw;
             }
-            
             ctx.stroke();
         };
         draw();
     }
     
-    formatTime(seconds) {
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        const ms = Math.floor((seconds % 1) * 1000);
-        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+    formatTime(s) {
+        const m = Math.floor(s / 60);
+        const sec = Math.floor(s % 60);
+        const ms = Math.floor((s % 1) * 1000);
+        return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
     }
 }
 
-// Initialize DAW
 const daw = new JustDAW();
 
-// Register Service Worker for PWA
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-            .then((registration) => {
-                console.log('Just-DAW: Service Worker registered with scope:', registration.scope);
-                
-                registration.addEventListener('updatefound', () => {
-                    const newWorker = registration.installing;
-                    newWorker.addEventListener('statechange', () => {
-                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                            console.log('Just-DAW: New version available!');
-                        }
-                    });
-                });
-            })
-            .catch((error) => {
-                console.log('Just-DAW: Service Worker registration failed:', error);
-            });
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
 }
