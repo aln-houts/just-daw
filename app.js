@@ -385,9 +385,82 @@ class JustDAW {
             return;
         }
         
-        const wrapper = document.createElement('div');
-        wrapper.className = 'effects-panel';
+        // Full rebuild — clear container completely to avoid duplication
+        container.innerHTML = '';
         
+        const panel = document.createElement('div');
+        panel.className = 'effects-panel';
+        
+        // Horizontal chain of effect squares
+        const chain = document.createElement('div');
+        chain.className = 'effects-chain';
+        
+        track.effects.forEach((effect, idx) => {
+            const slot = document.createElement('div');
+            slot.className = `effect-slot ${effect.enabled ? 'active' : 'bypassed'}`;
+            
+            // Header row: icon, name, toggle, remove
+            const header = document.createElement('div');
+            header.className = 'effect-slot-header';
+            
+            const icon = document.createElement('span');
+            icon.className = 'effect-icon';
+            icon.textContent = EffectFactory.getIcon(effect.type);
+            header.appendChild(icon);
+            
+            const name = document.createElement('span');
+            name.className = 'effect-slot-name';
+            name.textContent = EffectFactory.getDisplayName(effect.type);
+            header.appendChild(name);
+            
+            const toggle = document.createElement('button');
+            toggle.className = 'effect-toggle-btn';
+            toggle.textContent = effect.enabled ? 'ON' : 'OFF';
+            toggle.onclick = () => { this.toggleEffect(track.id, effect.id); this.renderEffectsPanel(container); };
+            header.appendChild(toggle);
+            
+            const rm = document.createElement('button');
+            rm.className = 'effect-remove-btn';
+            rm.textContent = '✕';
+            rm.onclick = () => { this.removeEffectFromTrack(track.id, effect.id); this.renderEffectsPanel(container); };
+            header.appendChild(rm);
+            
+            slot.appendChild(header);
+            
+            // Reorder row
+            const reorder = document.createElement('div');
+            reorder.className = 'effect-reorder';
+            const up = document.createElement('button');
+            up.textContent = '◀';
+            up.disabled = idx === 0;
+            up.onclick = () => { this.moveEffect(track.id, effect.id, -1); this.renderEffectsPanel(container); };
+            reorder.appendChild(up);
+            const down = document.createElement('button');
+            down.textContent = '▶';
+            down.disabled = idx === track.effects.length - 1;
+            down.onclick = () => { this.moveEffect(track.id, effect.id, 1); this.renderEffectsPanel(container); };
+            reorder.appendChild(down);
+            slot.appendChild(reorder);
+            
+            // Knobs area
+            const knobs = document.createElement('div');
+            effect.renderUI(knobs);
+            slot.appendChild(knobs);
+            
+            chain.appendChild(slot);
+            
+            // Arrow between effects
+            if (idx < track.effects.length - 1) {
+                const arrow = document.createElement('div');
+                arrow.className = 'effect-chain-arrow';
+                arrow.textContent = '→';
+                chain.appendChild(arrow);
+            }
+        });
+        
+        panel.appendChild(chain);
+        
+        // Add effect row
         const addRow = document.createElement('div');
         addRow.className = 'effects-add-row';
         const sel = document.createElement('select');
@@ -395,72 +468,22 @@ class JustDAW {
         EffectFactory.getAvailableTypes().forEach(type => {
             const o = document.createElement('option');
             o.value = type;
-            o.textContent = EffectFactory.getDisplayName(type);
+            o.textContent = `${EffectFactory.getIcon(type)} ${EffectFactory.getDisplayName(type)}`;
             sel.appendChild(o);
         });
         addRow.appendChild(sel);
         const addBtn = document.createElement('button');
         addBtn.className = 'effects-add-btn';
-        addBtn.textContent = '+ Add Effect';
+        addBtn.textContent = '+ Add';
         addBtn.onclick = () => { this.addEffectToTrack(track.id, sel.value); this.renderEffectsPanel(container); };
         addRow.appendChild(addBtn);
-        wrapper.appendChild(addRow);
+        panel.appendChild(addRow);
         
         if (track.effects.length === 0) {
-            wrapper.innerHTML += '<div class="panel-empty">No effects on this track yet.<br>Select an effect type above and click "+ Add Effect".</div>';
-        } else {
-            const list = document.createElement('div');
-            list.className = 'effects-list';
-            track.effects.forEach((effect, idx) => {
-                const slot = document.createElement('div');
-                slot.className = `effect-slot ${effect.enabled ? 'active' : 'bypassed'}`;
-                
-                const top = document.createElement('div');
-                top.className = 'effect-slot-top';
-                
-                const name = document.createElement('span');
-                name.className = 'effect-slot-name';
-                name.textContent = EffectFactory.getDisplayName(effect.type);
-                top.appendChild(name);
-                
-                const toggle = document.createElement('button');
-                toggle.className = 'effect-toggle-btn';
-                toggle.textContent = effect.enabled ? 'ON' : 'OFF';
-                toggle.onclick = () => { this.toggleEffect(track.id, effect.id); this.renderEffectsPanel(container); };
-                top.appendChild(toggle);
-                
-                const up = document.createElement('button');
-                up.className = 'effect-reorder-btn';
-                up.textContent = '▲';
-                up.disabled = idx === 0;
-                up.onclick = () => { this.moveEffect(track.id, effect.id, -1); this.renderEffectsPanel(container); };
-                top.appendChild(up);
-                
-                const down = document.createElement('button');
-                down.className = 'effect-reorder-btn';
-                down.textContent = '▼';
-                down.disabled = idx === track.effects.length - 1;
-                down.onclick = () => { this.moveEffect(track.id, effect.id, 1); this.renderEffectsPanel(container); };
-                top.appendChild(down);
-                
-                const rm = document.createElement('button');
-                rm.className = 'effect-remove-btn';
-                rm.textContent = '✕';
-                rm.onclick = () => { this.removeEffectFromTrack(track.id, effect.id); this.renderEffectsPanel(container); };
-                top.appendChild(rm);
-                
-                slot.appendChild(top);
-                
-                const params = document.createElement('div');
-                params.className = 'effect-params';
-                effect.renderUI(params, track.id, effect.id, this);
-                slot.appendChild(params);
-                
-                list.appendChild(slot);
-            });
-            wrapper.appendChild(list);
+            panel.innerHTML += '<div class="panel-empty">No effects yet. Add one above.</div>';
         }
-        container.appendChild(wrapper);
+        
+        container.appendChild(panel);
     }
     
     // ─── Transport ──────────────────────────────────────────────────────────
@@ -706,9 +729,12 @@ class JustDAW {
         h.className = 'track-header' + (track.id === this.selectedTrackId ? ' selected' : '');
         h.id = `header-${track.id}`;
         h.innerHTML = `
-            <div class="track-header-top">
+            <div class="track-header-row">
                 <span class="track-name">${track.name}</span>
-                <button class="delete-track-btn" title="Delete">✕</button>
+                <div class="track-header-btns">
+                    <button class="track-fx-btn" title="Effects">FX</button>
+                    <button class="delete-track-btn" title="Delete">✕</button>
+                </div>
             </div>
             <div class="track-controls">
                 <button class="mute-btn" title="Mute">M</button>
@@ -716,18 +742,18 @@ class JustDAW {
                 <button class="arm-btn" title="Record Arm">R</button>
             </div>
             <div class="track-input-selector">
-                <label>Input:</label>
+                <label>In:</label>
                 <select><option value="">Default</option></select>
             </div>
             <div class="track-faders">
                 <div class="fader-row"><label>Vol</label><input type="range" min="0" max="1" step="0.01" value="${track.volume}"></div>
                 <div class="fader-row"><label>Pan</label><input type="range" min="-1" max="1" step="0.01" value="${track.pan}"></div>
             </div>
-            <div class="track-effects-indicator">${track.effects.length > 0 ? `<span class="effects-badge">${track.effects.length} FX</span>` : ''}</div>
         `;
         this.elements.trackHeaders.appendChild(h);
         
         h.querySelector('.delete-track-btn').onclick = (e) => { e.stopPropagation(); this.deleteTrack(track.id); };
+        h.querySelector('.track-fx-btn').onclick = (e) => { e.stopPropagation(); this.selectTrack(track.id); this.openBottomPanel('effects'); };
         h.querySelector('.mute-btn').onclick = (e) => { e.stopPropagation(); this.toggleMute(track.id); };
         h.querySelector('.solo-btn').onclick = (e) => { e.stopPropagation(); this.toggleSolo(track.id); };
         h.querySelector('.arm-btn').onclick = (e) => { e.stopPropagation(); this.toggleArm(track.id); };
