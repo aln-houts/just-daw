@@ -351,6 +351,7 @@ class JustDAW {
             (panel === 'effects' && b.textContent.trim() === 'Fx Effects')));
         
         if (panel === 'effects') {
+            this.initAudio();
             this.elements.bottomPanelTitle.textContent = 'Effects — ' + (this.selectedTrackId ? this.tracks.find(t => t.id === this.selectedTrackId)?.name || 'Track ' + this.selectedTrackId : 'No Track Selected');
             this.renderEffectsPanel(c);
         } else if (panel === 'editor') {
@@ -1050,6 +1051,7 @@ class JustDAW {
     
     // ─── Effects ────────────────────────────────────────────────────────────
     addEffectToTrack(trackId, type) {
+        this.initAudio();
         const t = this.tracks.find(x => x.id === trackId);
         if (!t) return;
         const fx = EffectFactory.create(this.audioContext, type);

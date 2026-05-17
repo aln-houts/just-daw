@@ -118,19 +118,19 @@ body {
 }
 
 .sidebar-header {
-    padding: 10px;
+    padding: 4px 10px;
     border-bottom: 1px solid #333;
 }
 
 .add-track-btn {
     width: 100%;
-    padding: 10px;
+    padding: 4px 10px;
     background-color: #4CAF50;
     border: none;
     color: white;
     cursor: pointer;
     border-radius: 5px;
-    font-size: 14px;
+    font-size: 12px;
 }
 
 .add-track-btn:hover {
@@ -545,21 +545,6 @@ body {
     50% { opacity: 0.7; }
 }
 
-/* Track Selection */
-.track-header {
-    cursor: pointer;
-    transition: background 0.15s;
-}
-
-.track-header:hover {
-    background-color: #2a2a2a;
-}
-
-.track-header.selected {
-    background-color: #1e3a1e;
-    border-left: 3px solid #4CAF50;
-}
-
 /* Tool Tray Active State */
 .tool-btn.active {
     background-color: #4CAF50;
@@ -805,10 +790,12 @@ body {
     align-items: center;
     padding-top: 4px;
     border-top: 1px solid #333;
+    max-width: 280px;
 }
 
 .effects-type-select {
-    flex-grow: 1;
+    width: auto;
+    min-width: 140px;
     padding: 4px 8px;
     background-color: #333;
     border: 1px solid #444;
