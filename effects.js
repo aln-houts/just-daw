@@ -141,8 +141,10 @@ class ReverbEffect extends EffectBase {
     }
 
     renderUI(container) {
-        this.renderKnob(container, 'Decay', 'decay', 0.1, 5, 0.1, v => v.toFixed(1) + 's');
-        this.renderKnob(container, 'Mix', 'mix', 0, 1, 0.01, v => Math.round(v * 100) + '%');
+        const row = document.createElement('div'); row.className = 'effect-knobs-row';
+        this.renderKnob(row, 'Decay', 'decay', 0.1, 5, 0.1, v => v.toFixed(1) + 's');
+        this.renderKnob(row, 'Mix', 'mix', 0, 1, 0.01, v => Math.round(v * 100) + '%');
+        container.appendChild(row);
     }
 }
 
@@ -187,9 +189,13 @@ class DelayEffect extends EffectBase {
     }
 
     renderUI(container) {
-        this.renderKnob(container, 'Time', 'time', 0.01, 1, 0.01, v => Math.round(v * 1000) + 'ms');
-        this.renderKnob(container, 'Fdbk', 'feedback', 0, 0.9, 0.01, v => Math.round(v * 100) + '%');
-        this.renderKnob(container, 'Mix', 'mix', 0, 1, 0.01, v => Math.round(v * 100) + '%');
+        const row1 = document.createElement('div'); row1.className = 'effect-knobs-row';
+        this.renderKnob(row1, 'Time', 'time', 0.01, 1, 0.01, v => Math.round(v * 1000) + 'ms');
+        container.appendChild(row1);
+        const row2 = document.createElement('div'); row2.className = 'effect-knobs-row';
+        this.renderKnob(row2, 'Fdbk', 'feedback', 0, 0.9, 0.01, v => Math.round(v * 100) + '%');
+        this.renderKnob(row2, 'Mix', 'mix', 0, 1, 0.01, v => Math.round(v * 100) + '%');
+        container.appendChild(row2);
     }
 }
 
@@ -224,10 +230,14 @@ class CompressorEffect extends EffectBase {
     }
 
     renderUI(container) {
-        this.renderKnob(container, 'Thresh', 'threshold', -60, 0, 1, v => v + 'dB');
-        this.renderKnob(container, 'Ratio', 'ratio', 1, 20, 0.5, v => v + ':1');
-        this.renderKnob(container, 'Atk', 'attack', 0.001, 0.1, 0.001, v => Math.round(v * 1000) + 'ms');
-        this.renderKnob(container, 'Rel', 'release', 0.01, 1, 0.01, v => Math.round(v * 1000) + 'ms');
+        const row1 = document.createElement('div'); row1.className = 'effect-knobs-row';
+        this.renderKnob(row1, 'Thresh', 'threshold', -60, 0, 1, v => v + 'dB');
+        this.renderKnob(row1, 'Ratio', 'ratio', 1, 20, 0.5, v => v + ':1');
+        container.appendChild(row1);
+        const row2 = document.createElement('div'); row2.className = 'effect-knobs-row';
+        this.renderKnob(row2, 'Atk', 'attack', 0.001, 0.1, 0.001, v => Math.round(v * 1000) + 'ms');
+        this.renderKnob(row2, 'Rel', 'release', 0.01, 1, 0.01, v => Math.round(v * 1000) + 'ms');
+        container.appendChild(row2);
     }
 }
 
@@ -272,9 +282,13 @@ class EQEffect extends EffectBase {
     }
 
     renderUI(container) {
-        this.renderKnob(container, 'Low', 'low', -12, 12, 0.5, v => (v > 0 ? '+' : '') + v + 'dB');
-        this.renderKnob(container, 'Mid', 'mid', -12, 12, 0.5, v => (v > 0 ? '+' : '') + v + 'dB');
-        this.renderKnob(container, 'High', 'high', -12, 12, 0.5, v => (v > 0 ? '+' : '') + v + 'dB');
+        const row1 = document.createElement('div'); row1.className = 'effect-knobs-row';
+        this.renderKnob(row1, 'Mid', 'mid', -12, 12, 0.5, v => (v > 0 ? '+' : '') + v + 'dB');
+        container.appendChild(row1);
+        const row2 = document.createElement('div'); row2.className = 'effect-knobs-row';
+        this.renderKnob(row2, 'Low', 'low', -12, 12, 0.5, v => (v > 0 ? '+' : '') + v + 'dB');
+        this.renderKnob(row2, 'High', 'high', -12, 12, 0.5, v => (v > 0 ? '+' : '') + v + 'dB');
+        container.appendChild(row2);
     }
 }
 
@@ -327,8 +341,10 @@ class DistortionEffect extends EffectBase {
     }
 
     renderUI(container) {
-        this.renderKnob(container, 'Drive', 'amount', 0, 100, 1, v => String(v));
-        this.renderKnob(container, 'Mix', 'mix', 0, 1, 0.01, v => Math.round(v * 100) + '%');
+        const row = document.createElement('div'); row.className = 'effect-knobs-row';
+        this.renderKnob(row, 'Drive', 'amount', 0, 100, 1, v => String(v));
+        this.renderKnob(row, 'Mix', 'mix', 0, 1, 0.01, v => Math.round(v * 100) + '%');
+        container.appendChild(row);
     }
 }
 

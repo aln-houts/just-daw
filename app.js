@@ -184,6 +184,7 @@ class JustDAW {
                 const blockEl = document.getElementById(`block-${this.dragState.blockId}`);
                 if (blockEl) blockEl.classList.remove('dragging');
                 this.dragState = null;
+                if (this.isPlaying) this.playFromCurrentTime();
             }
         };
         
@@ -256,6 +257,7 @@ class JustDAW {
         track.blocks.push(block);
         this.drawTrackWaveforms(track);
         this.renderAudioBlock(track, block);
+        if (this.isPlaying) this.playFromCurrentTime();
     }
     
     deleteSelectedBlock() {
@@ -817,7 +819,7 @@ class JustDAW {
                 </div>
             </div>
             <div class="track-header-buttons">
-                <button class="track-fx-btn" title="Open effects panel">FX</button>
+                <button class="track-fx-btn ${track.effects.length > 0 ? 'has-effects' : ''}" title="Open effects panel">FX</button>
                 <button class="arm-btn ${track.armed ? 'active' : ''}" title="Record Arm">R</button>
                 <button class="solo-btn ${track.soloed ? 'active' : ''}" title="Solo">S</button>
                 <button class="mute-btn ${track.muted ? 'active' : ''}" title="Mute">M</button>
@@ -1133,9 +1135,11 @@ class JustDAW {
     updateEffectsIndicator(track) {
         const h = document.getElementById(`header-${track.id}`);
         if (!h) return;
-        let ind = h.querySelector('.track-effects-indicator');
-        if (!ind) { ind = document.createElement('div'); ind.className = 'track-effects-indicator'; h.appendChild(ind); }
-        ind.innerHTML = track.effects.length > 0 ? `<span class="effects-badge">${track.effects.length} FX</span>` : '';
+        const fxBtn = h.querySelector('.track-fx-btn');
+        if (fxBtn) {
+            if (track.effects.length > 0) fxBtn.classList.add('has-effects');
+            else fxBtn.classList.remove('has-effects');
+        }
     }
     
     // ─── Mic Permission ─────────────────────────────────────────────────────
