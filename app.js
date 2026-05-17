@@ -779,14 +779,18 @@ class JustDAW {
         h.className = 'track-header' + (track.id === this.selectedTrackId ? ' selected' : '');
         h.id = `header-${track.id}`;
         h.innerHTML = `
-            <div class="track-header-top">
-                <span class="track-name">${esc(track.name)}</span>
-                <button class="arm-btn ${track.armed ? 'active' : ''}" title="Record Arm">R</button>
+            <div class="track-header-buttons">
+                <div class="track-btn-row">
+                    <button class="arm-btn ${track.armed ? 'active' : ''}" title="Record Arm">R</button>
+                    <button class="track-fx-btn" title="Effects">FX</button>
+                </div>
+                <div class="track-btn-row">
+                    <button class="mute-btn ${track.muted ? 'active' : ''}" title="Mute">M</button>
+                    <button class="solo-btn ${track.soloed ? 'active' : ''}" title="Solo">S</button>
+                </div>
             </div>
-            <div class="track-controls">
-                <button class="mute-btn ${track.muted ? 'active' : ''}" title="Mute">M</button>
-                <button class="solo-btn ${track.soloed ? 'active' : ''}" title="Solo">S</button>
-                <button class="track-fx-btn" title="Effects">FX</button>
+            <div class="track-name-row">
+                <span class="track-name">${esc(track.name)}</span>
             </div>
             <div class="track-knobs">
                 <div class="track-knob" id="vol-knob-${track.id}"></div>
