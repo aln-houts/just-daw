@@ -271,6 +271,8 @@ class JustDAW {
         this.elements.loopBtn.addEventListener('click', () => this.toggleLoop());
         this.elements.addTrackBtn.addEventListener('click', () => this.addTrack());
         this.elements.bpmInput.addEventListener('change', (e) => this.setBPM(e.target.value));
+        document.getElementById('save-project-btn').addEventListener('click', () => this.saveProject());
+        document.getElementById('export-mix-btn').addEventListener('click', () => this.exportMix());
         this.elements.masterVol.addEventListener('input', (e) => this.setMasterVolume(e.target.value));
         
         if (this.elements.bottomPanelClose) {
@@ -466,9 +468,7 @@ class JustDAW {
             }
         });
         
-        panel.appendChild(chain);
-        
-        // Add effect row
+        // Add effect row — placed first (left side in row layout)
         const addRow = document.createElement('div');
         addRow.className = 'effects-add-row';
         const sel = document.createElement('select');
@@ -486,6 +486,8 @@ class JustDAW {
         addBtn.onclick = () => { this.addEffectToTrack(track.id, sel.value); this.renderEffectsPanel(container); };
         addRow.appendChild(addBtn);
         panel.appendChild(addRow);
+        
+        panel.appendChild(chain);
         
         if (track.effects.length === 0) {
             const emptyMsg = document.createElement('div');
@@ -627,7 +629,10 @@ class JustDAW {
         const x = e.clientX - rect.left + this.elements.timelineGrid.scrollLeft;
         const time = Math.max(0, x / this.pixelsPerSecond);
         const wasPlaying = this.isPlaying;
-        if (wasPlaying) this.tracks.forEach(t => { if (t.sourceNode) { try { t.sourceNode.stop(); } catch(e){} t.sourceNode = null; } });
+        if (wasPlaying) this.tracks.forEach(t => {
+            if (t.activeSources) { t.activeSources.forEach(s => { try { s.stop(); } catch(e){} }); t.activeSources = []; }
+            t.sourceNode = null;
+        });
         this.currentTime = time;
         this.playStartTime = this.audioContext.currentTime - this.currentTime;
         this.elements.timeDisplay.textContent = this.formatTime(this.currentTime);
@@ -882,7 +887,7 @@ class JustDAW {
     renderTrackInputSelector(track) {
         const h = document.getElementById(`header-${track.id}`);
         if (!h) return;
-        const sel = h.querySelector('.track-input-selector select');
+        const sel = h.querySelector(".track-input-row select");
         if (!sel) return;
         const cur = sel.value;
         while (sel.options.length > 1) sel.remove(1);
@@ -966,7 +971,13 @@ class JustDAW {
     }
     handleSolo() {
         const s = this.tracks.some(t => t.soloed);
-        this.tracks.forEach(t => { t.gainNode.gain.value = s ? (t.soloed ? t.volume : 0) : (t.muted ? 0 : t.volume); });
+        this.tracks.forEach(t => {
+            let val;
+            if (t.muted) { val = 0; }
+            else if (s) { val = t.soloed ? t.volume : 0; }
+            else { val = t.volume; }
+            t.gainNode.gain.value = val;
+        });
     }
     toggleArm(id) {
         const t = this.tracks.find(x => x.id === id);
@@ -1278,6 +1289,155 @@ class JustDAW {
         draw();
     }
     
+    // ─── Project I/O ─────────────────────────────────────────────────────────
+    saveProject() {
+        const project = {
+            name: 'Just-DAW Project',
+            bpm: this.bpm,
+            tracks: this.tracks.map(t => ({
+                id: t.id,
+                name: t.name,
+                volume: t.volume,
+                pan: t.pan,
+                muted: t.muted,
+                soloed: t.soloed,
+                inputDeviceId: t.inputDeviceId,
+                blocks: t.blocks.map(b => ({
+                    id: b.id,
+                    startTime: b.startTime,
+                    endTime: b.endTime,
+                    duration: b.duration,
+                    audioData: b.audioBuffer ? this._audioBufferToBase64(b.audioBuffer) : null,
+                    sampleRate: b.audioBuffer ? b.audioBuffer.sampleRate : null,
+                    channels: b.audioBuffer ? b.audioBuffer.numberOfChannels : null
+                })),
+                effects: t.effects.map(e => ({
+                    id: e.id,
+                    type: e.type,
+                    enabled: e.enabled,
+                    params: e.params
+                }))
+            }))
+        };
+        const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'just-daw-project.json';
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    _audioBufferToBase64(buffer) {
+        const channels = [];
+        for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+            channels.push(Array.from(buffer.getChannelData(ch)));
+        }
+        return { sampleRate: buffer.sampleRate, numberOfChannels: buffer.numberOfChannels, data: channels };
+    }
+
+    async exportMix() {
+        if (this.tracks.length === 0 || this.tracks.every(t => t.blocks.length === 0)) {
+            alert('No audio to export. Add some tracks and blocks first.');
+            return;
+        }
+        this.initAudio();
+        // Calculate total duration
+        let maxEnd = 0;
+        this.tracks.forEach(t => {
+            t.blocks.forEach(b => { if (b.endTime > maxEnd) maxEnd = b.endTime; });
+        });
+        if (maxEnd === 0) { alert('No audio to export.'); return; }
+        const sampleRate = this.audioContext.sampleRate;
+        const offlineCtx = new OfflineAudioContext(2, Math.ceil(maxEnd * sampleRate), sampleRate);
+        const masterGain = offlineCtx.createGain();
+        masterGain.gain.value = this.masterGain ? this.masterGain.gain.value : 0.8;
+        const analyser = offlineCtx.createAnalyser();
+        masterGain.connect(analyser);
+        analyser.connect(offlineCtx.destination);
+        // Build offline graph for each track
+        this.tracks.forEach(track => {
+            const hasSolo = this.tracks.some(t => t.soloed);
+            const trackGain = offlineCtx.createGain();
+            const effectiveVol = track.muted ? 0 : (hasSolo ? (track.soloed ? track.volume : 0) : track.volume);
+            trackGain.gain.value = effectiveVol;
+            const trackPan = offlineCtx.createStereoPanner();
+            trackPan.pan.value = track.pan;
+            trackGain.connect(trackPan);
+            trackPan.connect(masterGain);
+            // Add enabled effects
+            const enabledFx = track.effects.filter(e => e.enabled);
+            if (enabledFx.length > 0) {
+                let prevNode = trackGain;
+                enabledFx.forEach(fx => {
+                    const fxNodes = fx.nodes.filter(n => n && n.context === offlineCtx);
+                    if (fxNodes.length > 0) {
+                        prevNode.connect(fxNodes[0]);
+                        prevNode = fxNodes[fxNodes.length - 1];
+                    }
+                });
+                prevNode.connect(trackPan);
+            }
+            // Schedule blocks
+            track.blocks.forEach(block => {
+                if (!block.audioBuffer) return;
+                const src = offlineCtx.createBufferSource();
+                src.buffer = block.audioBuffer;
+                src.connect(trackGain);
+                src.start(block.startTime);
+            });
+        });
+        try {
+            const renderedBuffer = await offlineCtx.startRendering();
+            const wavBlob = this._audioBufferToWav(renderedBuffer);
+            const url = URL.createObjectURL(wavBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'just-daw-mix.wav';
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch(e) { console.error('Export error:', e); alert('Export failed: ' + e.message); }
+    }
+
+    _audioBufferToWav(buffer) {
+        const numChannels = buffer.numberOfChannels;
+        const sampleRate = buffer.sampleRate;
+        const format = 1; // PCM
+        const bitDepth = 16;
+        const bytesPerSample = bitDepth / 8;
+        const blockAlign = numChannels * bytesPerSample;
+        const dataLength = buffer.length * blockAlign;
+        const headerLength = 44;
+        const totalLength = headerLength + dataLength;
+        const arrayBuffer = new ArrayBuffer(totalLength);
+        const view = new DataView(arrayBuffer);
+        const writeString = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+        writeString(0, 'RIFF');
+        view.setUint32(4, totalLength - 8, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, format, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * blockAlign, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitDepth, true);
+        writeString(36, 'data');
+        view.setUint32(40, dataLength, true);
+        const channels = [];
+        for (let ch = 0; ch < numChannels; ch++) channels.push(buffer.getChannelData(ch));
+        let offset = 44;
+        for (let i = 0; i < buffer.length; i++) {
+            for (let ch = 0; ch < numChannels; ch++) {
+                const sample = Math.max(-1, Math.min(1, channels[ch][i]));
+                view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+                offset += 2;
+            }
+        }
+        return new Blob([arrayBuffer], { type: 'audio/wav' });
+    }
+
     formatTime(s) {
         const m = Math.floor(s / 60);
         const sec = Math.floor(s % 60);

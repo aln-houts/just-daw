@@ -66,6 +66,13 @@ body {
     font-size: 1.2rem;
 }
 
+#save-project-btn,
+#export-mix-btn {
+    font-size: 0.75rem;
+    padding: 6px 10px;
+    white-space: nowrap;
+}
+
 .transport-btn:hover {
     background-color: #444;
 }
@@ -661,19 +668,21 @@ body {
     padding: 12px 16px;
 }
 
-/* Effects Panel — Horizontal chain layout */
+/* Effects Panel — Row layout: add row left, chain right */
 .effects-panel {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     gap: 8px;
+    align-items: flex-start;
 }
 
 .effects-chain {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 4px;
     overflow-x: auto;
     padding: 4px 0;
+    flex-grow: 1;
 }
 
 .effect-chain-arrow {
@@ -685,7 +694,8 @@ body {
 
 .effect-slot {
     flex-shrink: 0;
-    width: 120px;
+    width: 140px;
+    min-height: 100%;
     background-color: #2a2a2a;
     border: 1px solid #444;
     border-radius: 6px;
@@ -836,19 +846,18 @@ body {
     font-family: monospace;
 }
 
-/* Effects add row */
+/* Effects add row — vertical layout on the left */
 .effects-add-row {
     display: flex;
-    gap: 6px;
-    align-items: center;
-    padding-top: 4px;
-    border-top: 1px solid #333;
-    max-width: 280px;
+    flex-direction: column;
+    gap: 4px;
+    align-items: stretch;
+    flex-shrink: 0;
+    width: 120px;
 }
 
 .effects-type-select {
-    width: auto;
-    min-width: 140px;
+    width: 100%;
     padding: 4px 8px;
     background-color: #333;
     border: 1px solid #444;
@@ -858,7 +867,7 @@ body {
 }
 
 .effects-add-btn {
-    padding: 4px 12px;
+    padding: 6px 12px;
     background-color: #4CAF50;
     border: none;
     color: white;
