@@ -26,6 +26,7 @@ class JustDAW {
         this._lyricsText = '';
         this.micPermissionGranted = false;
         this._meterAnimationId = null;
+        this.monitoring = false;
         
         // Block drag state
         this.dragState = null; // { blockId, trackId, startX, startStartTime }
@@ -273,6 +274,7 @@ class JustDAW {
         this.elements.bpmInput.addEventListener('change', (e) => this.setBPM(e.target.value));
         document.getElementById('save-project-btn').addEventListener('click', () => this.saveProject());
         document.getElementById('export-mix-btn').addEventListener('click', () => this.exportMix());
+        document.getElementById('monitor-check').addEventListener('change', (e) => { this.monitoring = e.target.checked; });
         this.elements.masterVol.addEventListener('input', (e) => this.setMasterVolume(e.target.value));
         
         if (this.elements.bottomPanelClose) {
@@ -408,6 +410,7 @@ class JustDAW {
         track.effects.forEach((effect, idx) => {
             const slot = document.createElement('div');
             slot.className = `effect-slot ${effect.enabled ? 'active' : 'bypassed'}`;
+            slot.dataset.knobs = Object.keys(effect.params).length;
             
             // Header row: icon, name, toggle, remove
             const header = document.createElement('div');
@@ -686,7 +689,7 @@ class JustDAW {
             track.mediaStream = stream;
             const src = this.audioContext.createMediaStreamSource(stream);
             src.connect(track.gainNode);
-            if (track.monitoring) {
+            if (this.monitoring) {
                 const monitorGain = this.audioContext.createGain();
                 monitorGain.gain.value = track.volume;
                 src.connect(monitorGain);
@@ -737,7 +740,6 @@ class JustDAW {
         const id = this.nextTrackId++;
         const track = {
             id, name: `Track ${id}`, volume: 0.8, pan: 0, muted: false, soloed: false, armed: false,
-            monitoring: false,
             blocks: [], sourceNode: null, activeSources: [],
             gainNode: this.audioContext.createGain(),
             panNode: this.audioContext.createStereoPanner(),
@@ -805,9 +807,6 @@ class JustDAW {
             <div class="track-header-left">
                 <div class="track-name-row">
                     <span class="track-name" contenteditable="true" title="Click to edit">${esc(track.name)}</span>
-                    <label class="monitor-label" title="Monitor input during recording">
-                        <input type="checkbox" class="monitor-check" ${track.monitoring ? 'checked' : ''}> 🎧
-                    </label>
                 </div>
                 <div class="track-input-row">
                     <select title="Input"><option value="">Default</option></select>
@@ -818,14 +817,6 @@ class JustDAW {
                 </div>
             </div>
             <div class="track-header-buttons">
-                <select class="track-fx-select" title="Add effect">
-                    <option value="">+ FX</option>
-                    <option value="reverb">🌊 Reverb</option>
-                    <option value="delay">🔁 Delay</option>
-                    <option value="compressor">📊 Comp</option>
-                    <option value="eq">🎛️ EQ</option>
-                    <option value="distortion">⚡ Dist</option>
-                </select>
                 <button class="track-fx-btn" title="Open effects panel">FX</button>
                 <button class="arm-btn ${track.armed ? 'active' : ''}" title="Record Arm">R</button>
                 <button class="solo-btn ${track.soloed ? 'active' : ''}" title="Solo">S</button>
@@ -848,7 +839,7 @@ class JustDAW {
         h.querySelector('.track-input-row select').onchange = (e) => { e.stopPropagation(); track.inputDeviceId = e.target.value || null; };
         h.querySelector('.track-name').onblur = (e) => { track.name = e.target.textContent.trim(); };
         h.querySelector('.track-name').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } };
-        h.querySelector('.monitor-check').onchange = (e) => { track.monitoring = e.target.checked; };
+
         
         // Build knobs
         this.buildTrackKnob(`vol-knob-${track.id}`, track.volume, 0, 1, 0.01, v => {
@@ -1281,7 +1272,7 @@ class JustDAW {
                 const block = { id: this.nextBlockId++, audioBuffer: buf, startTime: 0, endTime: buf.duration, duration: buf.duration };
                 const track = {
                     id: tid, name: file.name.replace(/\.[^/.]+$/, ''), volume: 0.8, pan: 0,
-                    muted: false, soloed: false, armed: false, monitoring: false,
+                    muted: false, soloed: false, armed: false,
                     blocks: [block], sourceNode: null, activeSources: [],
                     gainNode: this.audioContext.createGain(), panNode: this.audioContext.createStereoPanner(),
                     mediaStream: null, mediaRecorder: null, chunks: [],
