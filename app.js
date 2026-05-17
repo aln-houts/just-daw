@@ -779,25 +779,23 @@ class JustDAW {
         h.className = 'track-header' + (track.id === this.selectedTrackId ? ' selected' : '');
         h.id = `header-${track.id}`;
         h.innerHTML = `
+            <div class="track-header-left">
+                <div class="track-name-row">
+                    <span class="track-name" contenteditable="true" title="Click to edit">${esc(track.name)}</span>
+                </div>
+                <div class="track-input-row">
+                    <select title="Input"><option value="">Default</option></select>
+                </div>
+                <div class="track-knobs">
+                    <div class="track-knob" id="vol-knob-${track.id}"></div>
+                    <div class="track-knob" id="pan-knob-${track.id}"></div>
+                </div>
+            </div>
             <div class="track-header-buttons">
-                <div class="track-btn-row">
-                    <button class="arm-btn ${track.armed ? 'active' : ''}" title="Record Arm">R</button>
-                    <button class="track-fx-btn" title="Effects">FX</button>
-                </div>
-                <div class="track-btn-row">
-                    <button class="mute-btn ${track.muted ? 'active' : ''}" title="Mute">M</button>
-                    <button class="solo-btn ${track.soloed ? 'active' : ''}" title="Solo">S</button>
-                </div>
-            </div>
-            <div class="track-name-row">
-                <span class="track-name">${esc(track.name)}</span>
-            </div>
-            <div class="track-knobs">
-                <div class="track-knob" id="vol-knob-${track.id}"></div>
-                <div class="track-knob" id="pan-knob-${track.id}"></div>
-            </div>
-            <div class="track-input-selector">
-                <select title="Input"><option value="">Default</option></select>
+                <button class="track-fx-btn" title="Effects">FX</button>
+                <button class="arm-btn ${track.armed ? 'active' : ''}" title="Record Arm">R</button>
+                <button class="solo-btn ${track.soloed ? 'active' : ''}" title="Solo">S</button>
+                <button class="mute-btn ${track.muted ? 'active' : ''}" title="Mute">M</button>
             </div>
         `;
         this.elements.trackHeaders.appendChild(h);
@@ -806,7 +804,9 @@ class JustDAW {
         h.querySelector('.track-fx-btn').onclick = (e) => { e.stopPropagation(); this.selectTrack(track.id); this.openBottomPanel('effects'); };
         h.querySelector('.mute-btn').onclick = (e) => { e.stopPropagation(); this.toggleMute(track.id); };
         h.querySelector('.solo-btn').onclick = (e) => { e.stopPropagation(); this.toggleSolo(track.id); };
-        h.querySelector('.track-input-selector select').onchange = (e) => { e.stopPropagation(); track.inputDeviceId = e.target.value || null; };
+        h.querySelector('.track-input-row select').onchange = (e) => { e.stopPropagation(); track.inputDeviceId = e.target.value || null; };
+        h.querySelector('.track-name').onblur = (e) => { track.name = e.target.textContent.trim(); };
+        h.querySelector('.track-name').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } };
         
         // Build knobs
         this.buildTrackKnob(`vol-knob-${track.id}`, track.volume, 0, 1, 0.01, v => {

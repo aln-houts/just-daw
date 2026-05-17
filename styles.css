@@ -149,13 +149,14 @@ body {
     overflow-y: auto;
 }
 
-/* Track header — auto height to fit all controls */
+/* Track header — flex row with left controls + right buttons */
 .track-header {
     padding: 4px 6px;
     border-bottom: 1px solid #333;
     display: flex;
-    flex-direction: column;
-    gap: 3px;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 6px;
     box-sizing: border-box;
     cursor: pointer;
     transition: background 0.15s;
@@ -170,21 +171,27 @@ body {
     border-left: 3px solid #4CAF50;
 }
 
-/* Button grid: 2x2 square buttons on left */
-.track-header-buttons {
+/* Left side: name, input, knobs stacked */
+.track-header-left {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 3px;
+    flex-grow: 1;
+    min-width: 0;
 }
 
-.track-btn-row {
-    display: flex;
+/* Right side: 2x2 button grid */
+.track-header-buttons {
+    display: grid;
+    grid-template-columns: 28px 28px;
+    grid-template-rows: 22px 22px;
     gap: 2px;
+    flex-shrink: 0;
 }
 
-.track-btn-row button {
+.track-header-buttons button {
     width: 28px;
-    height: 24px;
+    height: 22px;
     padding: 0;
     display: flex;
     align-items: center;
@@ -195,7 +202,6 @@ body {
     border-radius: 3px;
     cursor: pointer;
     transition: all 0.15s;
-    flex-shrink: 0;
 }
 
 .track-name-row {
@@ -205,13 +211,24 @@ body {
 
 .track-name {
     font-weight: bold;
-    font-size: 0.7rem;
-    padding: 1px 3px;
+    font-size: 0.75rem;
+    padding: 2px 4px;
     border-radius: 2px;
     flex-grow: 1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    border: 1px solid transparent;
+    outline: none;
+}
+
+.track-name:hover {
+    border-color: #444;
+}
+
+.track-name:focus {
+    border-color: #4CAF50;
+    background-color: #2a2a2a;
 }
 
 /* Arm button */
@@ -238,7 +255,25 @@ body {
     50% { opacity: 0.7; }
 }
 
-/* Mute / Solo / FX buttons - styled via track-btn-row button */
+/* Button colors in the 2x2 grid */
+.arm-btn {
+    background-color: #5a1a1a;
+    border: 1px solid #8a2a2a;
+    color: #cc6666;
+}
+
+.arm-btn:hover {
+    background-color: #7a2a2a;
+    color: #ff8888;
+}
+
+.arm-btn.active {
+    background-color: #f44336;
+    border-color: #ff6655;
+    color: #fff;
+    animation: pulse-red 1s infinite;
+}
+
 .mute-btn {
     background-color: #444;
     color: #aaa;
@@ -282,33 +317,39 @@ body {
 /* Track knobs row */
 .track-knobs {
     display: flex;
-    justify-content: center;
-    gap: 10px;
+    gap: 6px;
+    align-items: center;
 }
 
 .track-knob .knob-body {
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
 }
 
 .track-knob .knob-indicator {
-    top: 3px;
-    height: 8px;
+    top: 2px;
+    height: 7px;
 }
 
 .track-knob .knob-label {
-    font-size: 0.55rem;
+    font-size: 0.5rem;
 }
 
-/* Input selector */
-.track-input-selector select {
-    width: 100%;
+/* Input selector row */
+.track-input-row {
+    display: flex;
+    align-items: center;
+}
+
+.track-input-row select {
+    width: auto;
+    min-width: 80px;
     padding: 1px 3px;
     background-color: #333;
     border: 1px solid #444;
     color: #ccc;
     border-radius: 2px;
-    font-size: 0.6rem;
+    font-size: 0.65rem;
 }
 
 /* Track Effects Indicator */
