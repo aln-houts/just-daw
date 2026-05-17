@@ -488,7 +488,10 @@ class JustDAW {
         panel.appendChild(addRow);
         
         if (track.effects.length === 0) {
-            panel.innerHTML += '<div class="panel-empty">No effects yet. Add one above.</div>';
+            const emptyMsg = document.createElement('div');
+            emptyMsg.className = 'panel-empty';
+            emptyMsg.textContent = 'No effects yet. Add one above.';
+            panel.appendChild(emptyMsg);
         }
         
         container.appendChild(panel);
