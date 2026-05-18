@@ -831,14 +831,18 @@ class JustDAW {
     }
     
     rebuildTrackAudioGraph(track) {
+        // Disconnect gainNode and panNode from whatever they were connected to
         try { track.gainNode.disconnect(); } catch(e){}
         try { track.panNode.disconnect(); } catch(e){}
-        track.effects.forEach(e => e.disconnect());
-        // Clean up any old passthrough nodes
+        // Clean up old passthrough nodes between effects
         if (track._passthroughNodes) {
             track._passthroughNodes.forEach(n => { try { n.disconnect(); } catch(e){} });
         }
         track._passthroughNodes = [];
+        // Note: we do NOT call effect.disconnect() because that tears apart
+        // the effect's internal node routing (e.g. dryGain -> outputGain).
+        // The effect's connect() method only handles external input/output connections.
+        
         // Build chain: gainNode -> [enabled effects in order] -> panNode -> masterGain
         const enabledEffects = track.effects.filter(e => e.enabled);
         if (enabledEffects.length === 0) {
@@ -1163,6 +1167,7 @@ class JustDAW {
         t.effects.push(fx);
         this.rebuildTrackAudioGraph(t);
         this.updateEffectsIndicator(t);
+        if (this.isPlaying) this.playFromCurrentTime();
     }
     removeEffectFromTrack(trackId, fxId) {
         const t = this.tracks.find(x => x.id === trackId);
@@ -1173,12 +1178,13 @@ class JustDAW {
         t.effects.splice(idx, 1);
         this.rebuildTrackAudioGraph(t);
         this.updateEffectsIndicator(t);
+        if (this.isPlaying) this.playFromCurrentTime();
     }
     toggleEffect(trackId, fxId) {
         const t = this.tracks.find(x => x.id === trackId);
         if (!t) return;
         const fx = t.effects.find(e => e.id === fxId);
-        if (fx) { fx.toggle(); this.rebuildTrackAudioGraph(t); this.updateEffectsIndicator(t); }
+        if (fx) { fx.toggle(); this.rebuildTrackAudioGraph(t); this.updateEffectsIndicator(t); if (this.isPlaying) this.playFromCurrentTime(); }
     }
     moveEffect(trackId, fxId, dir) {
         const t = this.tracks.find(x => x.id === trackId);
@@ -1189,6 +1195,7 @@ class JustDAW {
         if (ni < 0 || ni >= t.effects.length) return;
         [t.effects[idx], t.effects[ni]] = [t.effects[ni], t.effects[idx]];
         this.rebuildTrackAudioGraph(t);
+        if (this.isPlaying) this.playFromCurrentTime();
     }
     updateEffectsIndicator(track) {
         const h = document.getElementById(`header-${track.id}`);
