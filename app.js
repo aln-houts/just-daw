@@ -529,14 +529,17 @@ class JustDAW {
             track.activeSources.forEach(s => { try { s.stop(); } catch(e){} });
             track.activeSources = [];
             track.blocks.forEach(block => {
-                const blockEndTime = this.isLooping ? block.endTime : block.endTime;
-                // Play blocks currently overlapping playback position
-                if (this.currentTime >= block.startTime && this.currentTime < block.endTime) {
+                // Skip blocks with no audio
+                if (!block.audioBuffer) return;
+                // Determine effective end time (clip to loop end if looping)
+                const effectiveEnd = this.isLooping ? Math.min(block.endTime, this.loopEnd) : block.endTime;
+                // Block currently overlapping playback position
+                if (this.currentTime < effectiveEnd && this.currentTime >= block.startTime) {
                     const src = this.audioContext.createBufferSource();
                     src.buffer = block.audioBuffer;
                     src.connect(track.gainNode);
                     const offset = this.currentTime - block.startTime;
-                    const remaining = block.endTime - this.currentTime;
+                    const remaining = effectiveEnd - this.currentTime;
                     src.start(0, offset, remaining);
                     track.activeSources.push(src);
                 }
@@ -598,6 +601,7 @@ class JustDAW {
             // Restart all blocks that fall within the loop range
             this.tracks.forEach(t => {
                 t.blocks.forEach(b => {
+                    if (!b.audioBuffer) return;
                     // Block overlaps with loop range at all
                     if (b.startTime < this.loopEnd && b.endTime > this.loopStart) {
                         const s = this.audioContext.createBufferSource();
@@ -608,8 +612,10 @@ class JustDAW {
                         const offsetInBlock = blockStartInLoop - b.startTime;
                         const when = blockStartInLoop - this.loopStart;
                         const remaining = Math.min(b.endTime, this.loopEnd) - blockStartInLoop;
-                        s.start(this.audioContext.currentTime + when, offsetInBlock, remaining);
-                        t.activeSources.push(s);
+                        if (remaining > 0) {
+                            s.start(this.audioContext.currentTime + when, offsetInBlock, remaining);
+                            t.activeSources.push(s);
+                        }
                     }
                 });
                 t.sourceNode = t.activeSources.length > 0 ? t.activeSources[0] : null;
@@ -782,19 +788,31 @@ class JustDAW {
         try { track.gainNode.disconnect(); } catch(e){}
         try { track.panNode.disconnect(); } catch(e){}
         track.effects.forEach(e => e.disconnect());
+        // Clean up any old passthrough nodes
+        if (track._passthroughNodes) {
+            track._passthroughNodes.forEach(n => { try { n.disconnect(); } catch(e){} });
+        }
+        track._passthroughNodes = [];
         // Build chain: gainNode -> [enabled effects in order] -> panNode -> masterGain
         const enabledEffects = track.effects.filter(e => e.enabled);
         if (enabledEffects.length === 0) {
             track.gainNode.connect(track.panNode);
             track.panNode.connect(this.masterGain);
         } else {
-            // Connect gainNode to first effect
-            track.gainNode.connect(enabledEffects[0].nodes[0]);
-            // Chain effects together
+            // Use each effect's connect() method for proper internal routing (dry/wet, etc.)
+            let prevOutput = track.gainNode;
             for (let i = 0; i < enabledEffects.length; i++) {
                 const isLast = i === enabledEffects.length - 1;
-                const outputNode = isLast ? track.panNode : enabledEffects[i + 1].nodes[0];
-                enabledEffects[i].nodes[enabledEffects[i].nodes.length - 1].connect(outputNode);
+                if (isLast) {
+                    enabledEffects[i].connect(prevOutput, track.panNode);
+                } else {
+                    // Create a passthrough gain node between effects
+                    const passthrough = this.audioContext.createGain();
+                    passthrough.gain.value = 1;
+                    track._passthroughNodes.push(passthrough);
+                    enabledEffects[i].connect(prevOutput, passthrough);
+                    prevOutput = passthrough;
+                }
             }
             track.panNode.connect(this.masterGain);
         }
@@ -829,13 +847,6 @@ class JustDAW {
         
         h.querySelector('.arm-btn').onclick = (e) => { e.stopPropagation(); this.toggleArm(track.id); };
         h.querySelector('.track-fx-btn').onclick = (e) => { e.stopPropagation(); this.selectTrack(track.id); this.openBottomPanel('effects'); };
-        h.querySelector('.track-fx-select').onchange = (e) => {
-            if (e.target.value) {
-                this.addEffectToTrack(track.id, e.target.value);
-                this.updateEffectsIndicator(track);
-                e.target.value = '';
-            }
-        };
         h.querySelector('.mute-btn').onclick = (e) => { e.stopPropagation(); this.toggleMute(track.id); };
         h.querySelector('.solo-btn').onclick = (e) => { e.stopPropagation(); this.toggleSolo(track.id); };
         h.querySelector('.track-input-row select').onchange = (e) => { e.stopPropagation(); track.inputDeviceId = e.target.value || null; };
@@ -1406,6 +1417,8 @@ class JustDAW {
                     }
                 });
                 prevNode.connect(trackPan);
+            } else {
+                trackGain.connect(trackPan);
             }
             // Schedule blocks
             track.blocks.forEach(block => {
