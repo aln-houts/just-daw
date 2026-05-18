@@ -418,6 +418,11 @@ body {
     min-height: 200px;
 }
 
+.timeline-spacer {
+    pointer-events: none;
+    z-index: 0;
+}
+
 .track-row {
     min-height: 90px;
     border-bottom: 1px solid #333;

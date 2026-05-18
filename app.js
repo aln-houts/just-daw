@@ -18,6 +18,7 @@ class JustDAW {
         this.tracks = [];
         this.nextTrackId = 1;
         this.nextBlockId = 1;
+        this._timelineWidth = 0; // auto-expanding timeline width in pixels
         this.selectedTrackId = null;
         this.selectedBlockId = null;
         this.audioInputDevices = [];
@@ -27,6 +28,7 @@ class JustDAW {
         this.micPermissionGranted = false;
         this._meterAnimationId = null;
         this.monitoring = false;
+        this._lastRescheduleTime = 0;
         
         // Block drag state
         this.dragState = null; // { blockId, trackId, startX, startStartTime }
@@ -219,6 +221,7 @@ class JustDAW {
         
         // Redraw waveform
         this.drawTrackWaveforms(track);
+        this.updateTimelineWidth();
     }
     
     // ─── Block Copy/Paste ───────────────────────────────────────────────────
@@ -257,6 +260,7 @@ class JustDAW {
         track.blocks.push(block);
         this.drawTrackWaveforms(track);
         this.renderAudioBlock(track, block);
+        this.updateTimelineWidth();
         if (this.isPlaying) this.playFromCurrentTime();
     }
     
@@ -538,6 +542,7 @@ class JustDAW {
                     const src = this.audioContext.createBufferSource();
                     src.buffer = block.audioBuffer;
                     src.connect(track.gainNode);
+                    src._blockId = block.id;
                     const offset = this.currentTime - block.startTime;
                     const remaining = effectiveEnd - this.currentTime;
                     src.start(0, offset, remaining);
@@ -548,9 +553,42 @@ class JustDAW {
                     const src = this.audioContext.createBufferSource();
                     src.buffer = block.audioBuffer;
                     src.connect(track.gainNode);
+                    src._blockId = block.id;
                     const when = block.startTime - this.currentTime;
                     src.start(this.audioContext.currentTime + when);
                     track.activeSources.push(src);
+                }
+            });
+            track.sourceNode = track.activeSources.length > 0 ? track.activeSources[0] : null;
+        });
+        this._lastRescheduleTime = this.audioContext.currentTime;
+    }
+    
+    scheduleUpcomingBlocks() {
+        // Schedule all blocks that will play in the next SCHEDULE_AHEAD seconds
+        // but aren't already scheduled. This handles blocks that were moved/duplicated
+        // to future positions during playback.
+        const SCHEDULE_AHEAD = 2.0;
+        this.tracks.forEach(track => {
+            track.activeSources = track.activeSources || [];
+            track.blocks.forEach(block => {
+                if (!block.audioBuffer) return;
+                const effectiveEnd = this.isLooping ? Math.min(block.endTime, this.loopEnd) : block.endTime;
+                // Block is in the future but within scheduling window
+                if (block.startTime > this.currentTime && block.startTime < this.currentTime + SCHEDULE_AHEAD) {
+                    // Check if this block is already scheduled (not ended)
+                    const alreadyScheduled = track.activeSources.some(s => {
+                        return s._blockId === block.id;
+                    });
+                    if (!alreadyScheduled) {
+                        const src = this.audioContext.createBufferSource();
+                        src.buffer = block.audioBuffer;
+                        src.connect(track.gainNode);
+                        src._blockId = block.id; // Tag for deduplication
+                        const when = block.startTime - this.currentTime;
+                        src.start(this.audioContext.currentTime + when);
+                        track.activeSources.push(src);
+                    }
                 }
             });
             track.sourceNode = track.activeSources.length > 0 ? track.activeSources[0] : null;
@@ -589,6 +627,13 @@ class JustDAW {
     updatePlayhead() {
         if (!this.isPlaying && !this.isRecording) return;
         this.currentTime = this.audioContext.currentTime - this.playStartTime;
+        
+        // Periodically reschedule upcoming blocks (every 0.5s) to handle moved/duplicated blocks
+        if (this.isPlaying && this.audioContext.currentTime - this._lastRescheduleTime > 0.5) {
+            this._lastRescheduleTime = this.audioContext.currentTime;
+            this.scheduleUpcomingBlocks();
+        }
+        
         if (this.isLooping && this.currentTime >= this.loopEnd) {
             this.currentTime = this.loopStart;
             this.playStartTime = this.audioContext.currentTime - this.loopStart;
@@ -723,6 +768,7 @@ class JustDAW {
                         track.blocks.push(block);
                         this.drawTrackWaveforms(track);
                         this.renderAudioBlock(track, block);
+                        this.updateTimelineWidth();
                     } catch(e) { console.error('Decode error:', e); }
                 }
                 stream.getTracks().forEach(t => t.stop());
@@ -1059,6 +1105,7 @@ class JustDAW {
         
         row.appendChild(el);
         this.setupBlockDrag(el, track.id, block);
+        this.updateTimelineWidth();
     }
     
     deleteBlock(trackId, blockId) {
@@ -1243,7 +1290,7 @@ class JustDAW {
     renderRuler() {
         const ruler = this.elements.timelineRuler;
         ruler.innerHTML = '';
-        const w = Math.max(ruler.offsetWidth, this.elements.timelineGrid.scrollWidth);
+        const w = Math.max(this._timelineWidth, ruler.offsetWidth, this.elements.timelineGrid.scrollWidth);
         const totalSec = Math.max(w / this.pixelsPerSecond, 120);
         const content = document.createElement('div');
         content.style.position = 'relative';
@@ -1266,6 +1313,37 @@ class JustDAW {
             }
         }
         ruler.appendChild(content);
+    }
+    
+    updateTimelineWidth() {
+        // Calculate the rightmost edge of any block across all tracks
+        let maxEnd = 60; // minimum 60 seconds visible
+        this.tracks.forEach(t => {
+            t.blocks.forEach(b => {
+                if (b.endTime > maxEnd) maxEnd = b.endTime;
+            });
+        });
+        // Add 10 seconds of padding
+        const newWidth = Math.ceil((maxEnd + 10) * this.pixelsPerSecond);
+        if (newWidth > this._timelineWidth) {
+            this._timelineWidth = newWidth;
+            // Update the grid background/scroll area
+            const grid = this.elements.timelineGrid;
+            // Set min-width on the grid content area
+            let spacer = grid.querySelector('.timeline-spacer');
+            if (!spacer) {
+                spacer = document.createElement('div');
+                spacer.className = 'timeline-spacer';
+                spacer.style.position = 'absolute';
+                spacer.style.top = '0';
+                spacer.style.left = '0';
+                spacer.style.height = '100%';
+                grid.appendChild(spacer);
+            }
+            spacer.style.width = `${this._timelineWidth}px`;
+            // Also update ruler
+            this.renderRuler();
+        }
     }
     
     setupResizeHandler() {
@@ -1299,7 +1377,7 @@ class JustDAW {
                 this.renderTrackHeader(track);
                 this.renderTrackRow(track);
                 this.updateTrackAudio(track);
-                requestAnimationFrame(() => { this.drawTrackWaveforms(track); this.renderAudioBlock(track, block); });
+                requestAnimationFrame(() => { this.drawTrackWaveforms(track); this.renderAudioBlock(track, block); this.updateTimelineWidth(); });
             } catch(e) { console.error('Error decoding audio:', e); alert(`Could not load "${file.name}": ${e.message}`); }
         }
     }
